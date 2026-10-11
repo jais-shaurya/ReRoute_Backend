@@ -207,14 +207,16 @@ Phase 2 is now implemented and verified against the live database and planner se
 - [x] API 401 session expiry and 403 handling
 - [x] Responsive browser check at 390px with no horizontal overflow
 - [x] Frontend scripts pass Node syntax checks
-- [ ] Phase 5 frontend files and `/api/auth/me` backend contract change committed
+- [x] Phase 5 frontend files and `/api/auth/me` backend contract change committed
 
 ### Verification
 
 - Frontend syntax: `node --check app.js` and `node --check workspace.js` passed.
-- Real browser/database integration verified login and current-user profile; live dashboard counts; supplier create/delete (`201`/`200`); healthcare profile weights (`20/30/50`); a real planner recommendation displaying `Supplier-only 7.9%` with route evidence unknown; scenario save and execute (run `26`); history comparison/explanation; member provisioning; expired-token return to login; analyst role controls and `403`; and 390px viewport overflow check.
+- Backend current-user integration: `..\ReRoute_Backend\venv\Scripts\python.exe -m pytest -q scripts/test_security.py::test_password_login_and_generic_invalid_credentials` passed (`1 passed`).
+- Real browser/database integration verified login and current-user profile; live dashboard counts; supplier create/delete (`201`/`200`); healthcare profile weights (`20/30/50`); a real planner recommendation displaying `Supplier-only 7.9%` with route evidence unknown; scenario save and execute (run `26`); history comparison/explanation; member provisioning; invalid-token `401` return to login; analyst role controls and `403`; and 390px viewport overflow check.
 - Browser checks used a temporary local signing key and temporary test accounts. Those accounts and the test scenario/run were removed after verification. No signing secret was written to repository files.
 - The frontend has no npm manifest/build framework; the static client is served with `python -m http.server 5500`.
+- Frontend commit: `75bdbcb` (`feat: rebuild ReRoute operations frontend`); backend endpoint/contract commit: `7874578` (`feat: expose authenticated user profile for client`).
 
 ### Scope and limitations
 
