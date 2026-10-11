@@ -69,3 +69,35 @@ Phase 1 is considered stable only when the targeted planner and API tests pass w
 
 - Nonessential profile customization was intentionally deferred in favor of sensible defaults and enforceable guardrails.
 - No breaking API change was introduced beyond adding a supported optional `industry` field with validation.
+
+## Phase 2 — Business APIs and tenant-scoped operations
+
+### Objective
+
+Expose the real supply-chain entity management layer and scenario execution API while enforcing stricter organization-level data isolation and role-aware access.
+
+### Scope
+
+- Create and manage suppliers, customers, warehouses, factories, and routes through the business API
+- Create and run planning scenarios tied to a user organization
+- Maintain planning-run history and recommendation comparison/explanation endpoints
+- Enforce role and tenant access restrictions using the live DB-backed auth model
+- Continue to use the real planner pipeline instead of mocked or duplicated business logic
+
+### Backend changes
+
+- Added organization-scoped auth bootstrap in `app/security/auth.py`
+- Added `OrganizationEntityAccess` to enforce tenant boundaries at the database row level
+- Updated `BusinessService` to scope entity list/get/create/update/delete operations to the current organization
+- Kept scenario execution and planning-run storage tied to the real planner service and JSON-serializable payloads
+
+### Tests and acceptance criteria
+
+- Business CRUD routes work for the current organization
+- Cross-organizational ID access is rejected with `403`
+- Scenario execution creates a real planning run with a JSON-safe result payload
+- Recommendation comparison and explanation endpoints return planner data without serialization errors
+
+### Stable checkpoint
+
+Phase 2 is considered complete when the business API and regression suite pass without planner regressions.

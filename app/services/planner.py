@@ -221,6 +221,7 @@ class PlannerService:
         weights: ScoringWeights | None = None,
         max_alternatives: int = 3,
         industry: str | None = None,
+        base_graph: nx.DiGraph | None = None,
     ) -> PlannerResult:
         """
         Execute the complete ReRoute planning pipeline.
@@ -276,7 +277,7 @@ class PlannerService:
         # Build base graph
         # ----------------------------------------------------
 
-        graph = self.build_graph()
+        graph = base_graph.copy() if base_graph is not None else self.build_graph()
 
         # ----------------------------------------------------
         # Validate selected customer
