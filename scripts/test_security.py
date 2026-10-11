@@ -72,6 +72,14 @@ def test_password_login_and_generic_invalid_credentials(tenant_user):
         assert response.json()["token_type"] == "bearer"
         assert "password" not in response.text
         assert "password_hash" not in response.text
+        profile = client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+        )
+        assert profile.status_code == 200
+        assert profile.json()["id"] == user_id
+        assert profile.json()["role"] == "planner"
+        assert profile.json()["organization"]["id"] == tenant_user[1]
         protected = client.get(
             "/api/business/suppliers",
             headers={"Authorization": f"Bearer {response.json()['access_token']}"},

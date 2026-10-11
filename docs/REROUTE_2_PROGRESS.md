@@ -191,3 +191,33 @@ Phase 2 is now implemented and verified against the live database and planner se
 - Provision/reset an admin using `python scripts/provision_admin.py`; never expose its direct database access to application users.
 - Configure TLS and rate-limiting/brute-force controls at the reverse proxy or gateway. MFA, refresh tokens, verification emails, and identity-provider integration are not implemented.
 - The old identity headers are ignored. As documented in Phase 2, those headers are not cryptographic credentials and must not be trusted if a deployment reintroduces them through a gateway.
+
+## Phase 5 — Frontend rebuild and backend integration
+
+### Acceptance checklist
+
+- [x] Signed-token login, session restore, sign-out, and `/api/auth/me` organization/role context
+- [x] Role-aware navigation and controls; backend remains authoritative for authorization
+- [x] Real API dashboard and supplier/customer/warehouse/factory/route management
+- [x] Saved disruption scenarios and real planner execution
+- [x] Industry preference and profile-default cost/time/risk weights
+- [x] Planner results, alternatives, rejected candidates, explanation, and partial-risk evidence
+- [x] Planning history with run comparison and feasibility explanation
+- [x] Admin-only member provisioning with backend-enforced roles
+- [x] API 401 session expiry and 403 handling
+- [x] Responsive browser check at 390px with no horizontal overflow
+- [x] Frontend scripts pass Node syntax checks
+- [ ] Phase 5 frontend files and `/api/auth/me` backend contract change committed
+
+### Verification
+
+- Frontend syntax: `node --check app.js` and `node --check workspace.js` passed.
+- Real browser/database integration verified login and current-user profile; live dashboard counts; supplier create/delete (`201`/`200`); healthcare profile weights (`20/30/50`); a real planner recommendation displaying `Supplier-only 7.9%` with route evidence unknown; scenario save and execute (run `26`); history comparison/explanation; member provisioning; expired-token return to login; analyst role controls and `403`; and 390px viewport overflow check.
+- Browser checks used a temporary local signing key and temporary test accounts. Those accounts and the test scenario/run were removed after verification. No signing secret was written to repository files.
+- The frontend has no npm manifest/build framework; the static client is served with `python -m http.server 5500`.
+
+### Scope and limitations
+
+- Organization name/role are read from `/api/auth/me`. Organization creation remains operator-provisioned because the current business API does not provide a safe self-enrollment/organization-owner workflow.
+- Industry choice is a per-user browser preference because the backend does not persist an organization-level industry profile.
+- The existing identity-header limitation remains documented; the browser sends only the signed Bearer token and does not send identity or role headers.

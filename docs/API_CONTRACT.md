@@ -94,6 +94,8 @@ All business and planner endpoints require a signed access token:
 
 `POST /api/auth/token` accepts JSON `{ "email": "...", "password": "..." }` and returns an HS256 Bearer token valid for 15 minutes. Send it as `Authorization: Bearer <access_token>`. Passwords are stored using Argon2 hashes and are never returned by user-management endpoints.
 
+`GET /api/auth/me` requires that Bearer token and returns the authenticated user's database-backed `id`, `email`, `full_name`, `role`, and `organization` (`id`, `name`, `slug`). The frontend uses this endpoint instead of reading identity or role from browser-controlled headers or unverified token claims.
+
 Tokens require a configured `REROUTE_AUTH_SECRET` of at least 32 bytes. If it is missing or too short, token-protected requests fail closed with `503`; no default production secret is supplied. Generate and inject a high-entropy value through the deployment secret manager. The user ID in the signed token is resolved against the database on each request, so inactive/deleted users are rejected and the persisted role is authoritative.
 
 Legacy `X-User-Id`, `X-Organization-Id`, and `X-User-Role` headers are ignored and do not authenticate or select a tenant. Their previous limitation still applies: identity/role headers are not cryptographic credentials and must not be trusted if reintroduced by a deployment gateway.

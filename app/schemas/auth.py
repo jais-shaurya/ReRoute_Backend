@@ -10,3 +10,17 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class OrganizationIdentity(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+
+class CurrentUserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    organization: OrganizationIdentity
