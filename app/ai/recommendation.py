@@ -70,6 +70,7 @@ def _build_explanation(selected: ScoredPlan) -> str:
     risk = selected.risk
 
     route = " -> ".join(plan.path)
+    risk_label = "partial supplier-failure risk" if risk.risk_is_partial else "plan risk"
 
     return (
         f"Plan ranked #1 is recommended with an overall score of "
@@ -78,10 +79,21 @@ def _build_explanation(selected: ScoredPlan) -> str:
         f"{plan.supplier_id} to customer {plan.customer_id} "
         f"along {route}. "
         f"The plan has transportation cost {plan.total_cost:.2f}, "
-        f"delivery time {plan.total_days} day(s), and Bayesian "
-        f"plan risk {risk.plan_risk:.6f}. "
-        f"The score combines normalized cost, delivery time, and risk "
-        f"using the configured multi-objective weights."
+        f"delivery time {plan.total_days} day(s), and {risk_label} "
+        f"{risk.plan_risk:.6f}. "
+        f"Score = {selected.cost_weight:.3f} * cost({selected.normalized_cost:.6f}) "
+        f"+ {selected.time_weight:.3f} * time({selected.normalized_time:.6f}) "
+        f"+ {selected.risk_weight:.3f} * risk({selected.normalized_risk:.6f}) "
+        f"= {selected.overall_score:.6f}; objectives use min-max normalization "
+        f"across feasible candidates. The score combines normalized cost, "
+        f"delivery time, and risk using the configured weights."
+        + (
+            " Route reliability is unavailable; the risk score includes only "
+            "quantified supplier reliability."
+            if risk.risk_is_partial
+            else " Supplier and route failure probabilities are combined under "
+            "a conditional-independence assumption."
+        )
     )
 
 

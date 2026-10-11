@@ -7,7 +7,7 @@ from app.schemas.planner import (
     PlannerRequest,
     PlannerResponse,
 )
-from app.services.planner import PlannerService
+from app.services.planner import InfeasiblePlanningError, PlannerService
 from app.services.planner_serializer import (
     serialize_planner_result,
 )
@@ -34,11 +34,13 @@ def recommend_plan(
     service = PlannerService(db)
 
     try:
-        weights = ScoringWeights(
-            cost_weight=request.weights.cost,
-            time_weight=request.weights.time,
-            risk_weight=request.weights.risk,
-        )
+        weights = None
+        if request.weights is not None:
+            weights = ScoringWeights(
+                cost_weight=request.weights.cost,
+                time_weight=request.weights.time,
+                risk_weight=request.weights.risk,
+            )
 
         result = service.recommend(
             customer_id=request.customer_id,
@@ -62,12 +64,18 @@ def recommend_plan(
 
         return serialize_planner_result(result)
 
+    except InfeasiblePlanningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        )
+
     except ValueError as exc:
         message = str(exc)
 
         if (
-            "does not exist" in message
-            or "unavailable" in message
+            "does not exist" in message.lower()
+            or "unavailable" in message.lower()
         ):
             raise HTTPException(
                 status_code=404,
@@ -80,7 +88,18 @@ def recommend_plan(
                 detail=message,
             )
 
-        raise HTTPException(
-            status_code=400,
-            detail=message,
+        client_error_fragments = (
+            "must be greater than zero",
+            "cannot be negative",
+            "is required",
+            "Unknown industry",
+            "Demand spike percentage",
+            "Unsupported disruption",
         )
+        if any(fragment.lower() in message.lower() for fragment in client_error_fragments):
+            raise HTTPException(status_code=400, detail=message)
+
+        raise HTTPException(
+            status_code=500,
+            detail="The planner encountered an internal error.",
+        ) from exc

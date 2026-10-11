@@ -1,4 +1,18 @@
 import networkx as nx
+from math import ceil, isfinite
+
+
+def round_spiked_quantity(original_demand: float, percentage: float) -> int:
+    """Round the resulting post-spike demand upward to a whole unit."""
+    if not isinstance(original_demand, (int, float)) or isinstance(original_demand, bool):
+        raise ValueError("Original demand must be numeric.")
+    if not isinstance(percentage, (int, float)) or isinstance(percentage, bool):
+        raise ValueError("Demand spike percentage must be numeric.")
+    if not isfinite(float(original_demand)) or original_demand < 0:
+        raise ValueError("Original demand must be finite and non-negative.")
+    if not isfinite(float(percentage)) or percentage < 0:
+        raise ValueError("Demand spike percentage must be finite and non-negative.")
+    return ceil(original_demand * (1 + percentage / 100))
 
 
 def simulate_supplier_failure(
@@ -65,11 +79,6 @@ def simulate_demand_spike(
         )
 
     # Validate percentage
-    if percentage < 0:
-        raise ValueError(
-            "Demand spike percentage cannot be negative."
-        )
-
     # Make sure the target is actually a customer
     if scenario.nodes[customer_node]["node_type"] != "customer":
         raise ValueError(
@@ -82,9 +91,7 @@ def simulate_demand_spike(
     ]["demand"]
 
     # Calculate increased demand
-    new_demand = original_demand * (
-        1 + percentage / 100
-    )
+    new_demand = round_spiked_quantity(original_demand, percentage)
 
     # Update only the scenario
     scenario.nodes[

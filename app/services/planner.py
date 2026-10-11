@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-from math import ceil
-
 import networkx as nx
 from sqlalchemy.orm import Session
 
@@ -11,7 +9,10 @@ from app.ai.bayesian_risk import (
 )
 from app.ai.csp import (
     CandidatePlan,
+    CandidateRejection,
+    CandidateSearchResult,
     generate_feasible_plans,
+    search_feasible_plans,
 )
 from app.ai.disruption import (
     simulate_demand_spike,
@@ -56,6 +57,23 @@ class PlannerResult:
     recommendation: RecommendationResult
     scenario: PlannerScenario
     candidate_plans: tuple[ScoredPlan, ...]
+    rejected_candidates: tuple[CandidateRejection, ...] = ()
+
+
+class InfeasiblePlanningError(ValueError):
+    """A valid planning request for which all known candidates are infeasible."""
+
+    def __init__(self, rejected_candidates: tuple[CandidateRejection, ...]):
+        self.rejected_candidates = rejected_candidates
+        details = []
+        for rejection in rejected_candidates:
+            path = " -> ".join(rejection.path) if rejection.path else "no path"
+            reasons = "; ".join(rejection.reasons)
+            details.append(f"supplier {rejection.supplier_id} ({path}): {reasons}")
+        message = "No feasible recovery plans exist for the requested scenario."
+        if details:
+            message += " Rejected candidates: " + " | ".join(details)
+        super().__init__(message)
 
 
 class PlannerService:
@@ -145,6 +163,20 @@ class PlannerService:
             graph,
             customer_id,
             quantity,
+        )
+
+    def search_candidates(
+        self,
+        graph: nx.DiGraph,
+        customer_id: int,
+        quantity: int,
+        min_supplier_reliability: float,
+    ) -> CandidateSearchResult:
+        return search_feasible_plans(
+            graph,
+            customer_id,
+            quantity,
+            min_supplier_reliability,
         )
 
     # ========================================================
@@ -268,6 +300,7 @@ class PlannerService:
             industry,
             demand_spike_percentage=demand_spike_percentage,
             weights=weights,
+            disruption_type=disruption_type or "none",
         )
 
         if weights is None:
@@ -373,7 +406,7 @@ class PlannerService:
                     "value after demand spike."
                 )
 
-            scenario_quantity = ceil(updated_demand)
+            scenario_quantity = int(updated_demand)
             scenario_graph.nodes[customer_node]["demand"] = scenario_quantity
 
             if scenario_quantity <= 0:
@@ -399,17 +432,16 @@ class PlannerService:
         # CSP candidate generation
         # ----------------------------------------------------
 
-        plans = self.generate_candidates(
+        candidate_search = self.search_candidates(
             scenario_graph,
             customer_id,
             scenario_quantity,
+            profile.min_service_level,
         )
+        plans = candidate_search.plans
 
         if not plans:
-            raise ValueError(
-                "No feasible recovery plans exist "
-                "for the requested scenario."
-            )
+            raise InfeasiblePlanningError(candidate_search.rejected_candidates)
 
         # ----------------------------------------------------
         # Bayesian risk
@@ -451,4 +483,5 @@ class PlannerService:
             recommendation=recommendation,
             scenario=scenario,
             candidate_plans=tuple(ranked_plans),
+            rejected_candidates=candidate_search.rejected_candidates,
         )

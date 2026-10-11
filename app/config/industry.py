@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from app.ai.scoring import ScoringWeights
 
@@ -25,8 +26,8 @@ RETAIL_PROFILE = IndustryProfile(
     max_demand_spike_percentage=35.0,
     min_service_level=0.90,
     mandatory_rules=(
+        "supplier reliability must meet the profile minimum service level",
         "demand_spike_percentage cannot exceed the profile ceiling",
-        "planner must keep a feasible recovery path for the selected customer",
     ),
     allowed_disruption_types=("none", "supplier_failure", "demand_spike"),
 )
@@ -41,8 +42,8 @@ MANUFACTURING_PROFILE = IndustryProfile(
     max_demand_spike_percentage=25.0,
     min_service_level=0.95,
     mandatory_rules=(
-        "service level must remain above 95% under disruption",
-        "high-risk routes are rejected unless no feasible alternative exists",
+        "supplier reliability must meet the profile minimum service level",
+        "demand_spike_percentage cannot exceed the profile ceiling",
     ),
     allowed_disruption_types=("none", "supplier_failure", "demand_spike"),
 )
@@ -57,8 +58,8 @@ ECOMMERCE_PROFILE = IndustryProfile(
     max_demand_spike_percentage=45.0,
     min_service_level=0.85,
     mandatory_rules=(
+        "supplier reliability must meet the profile minimum service level",
         "demand_spike_percentage cannot exceed the profile ceiling",
-        "cost-sensitive fallback routes must preserve acceptable service level",
     ),
     allowed_disruption_types=("none", "supplier_failure", "demand_spike"),
 )
@@ -73,7 +74,7 @@ HEALTHCARE_PROFILE = IndustryProfile(
     max_demand_spike_percentage=15.0,
     min_service_level=0.98,
     mandatory_rules=(
-        "service level must stay at or above 98% under disruption",
+        "supplier reliability must meet the profile minimum service level",
         "demand spikes above threshold are rejected as infeasible for the profile",
     ),
     allowed_disruption_types=("none", "supplier_failure", "demand_spike"),
@@ -118,16 +119,25 @@ def validate_industry_configuration(
     name: str | IndustryProfile | None,
     demand_spike_percentage: float | None = None,
     weights: ScoringWeights | None = None,
+    disruption_type: str | None = None,
 ) -> IndustryProfile:
     profile = get_profile(name)
 
     if demand_spike_percentage is not None:
+        if not isfinite(float(demand_spike_percentage)) or demand_spike_percentage < 0:
+            raise ValueError("Demand spike percentage must be finite and non-negative.")
         if demand_spike_percentage > profile.max_demand_spike_percentage:
             raise ValueError(
                 f"Demand spike percentage {demand_spike_percentage}% exceeds the "
                 f"{profile.name} profile maximum of "
                 f"{profile.max_demand_spike_percentage}% for feasible planning."
             )
+
+    if disruption_type is not None and disruption_type not in profile.allowed_disruption_types:
+        raise ValueError(
+            f"Disruption type '{disruption_type}' is not allowed for the "
+            f"{profile.name} profile."
+        )
 
     if weights is not None and not isinstance(weights, ScoringWeights):
         raise ValueError("weights must be a ScoringWeights instance.")

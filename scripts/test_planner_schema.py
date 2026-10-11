@@ -52,8 +52,8 @@ def test_default_weights():
     )
 
     assert request.weights.cost == 0.4
-    assert request.weights.time == 0.3
-    assert request.weights.risk == 0.3
+    assert request.weights.time == 0.35
+    assert request.weights.risk == 0.25
 
 
 def test_invalid_quantity():

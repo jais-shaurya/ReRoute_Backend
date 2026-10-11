@@ -100,4 +100,48 @@ Phase 2 is now implemented and verified against the live database and planner se
 
 - Branch: local working state, no destructive operations performed
 - Stable checkpoint reached: yes
-- Current next step: continue with Phase 2 backend business API expansion
+- Current next step at that checkpoint: proceed to Phase 3 AI planning improvements
+
+## Phase 3 — AI planning improvements
+
+### Acceptance checklist
+
+- [x] Industry minimum supplier-reliability constraint affects candidate eligibility
+- [x] CSP checks path consistency, observed capacities, inventory, deadlines, and route-derived cost/time
+- [x] CSP searches alternate paths after a rejected cheapest path and retains data-backed rejection reasons
+- [x] Missing route reliability remains unknown; no synthetic route prior is used
+- [x] Risk response marks incomplete evidence and explains supplier-only risk
+- [x] Scoring validates weights and exposes the weights/formula and deterministic tie breaks
+- [x] Demand spikes consistently round fractional whole-unit demand upward
+- [x] Infeasible plans use a dedicated domain exception and `409`; internal planner errors remain `500`
+- [x] Disruption simulations are verified not to mutate the base graph or persisted supplier availability
+- [x] Focused Phase 3 and full regression suites pass on final code
+- [x] Phase 3 files committed as a stable checkpoint
+
+### Final verification
+
+- Focused AI/planner command: `..\ReRoute_Backend\venv\Scripts\python.exe -m pytest -q scripts/test_astar.py scripts/test_bayesian_risk.py scripts/test_csp.py scripts/test_disruption.py scripts/test_graph.py scripts/test_industry_config.py scripts/test_planner_quantity.py scripts/test_planner_schema.py scripts/test_planner_service.py scripts/test_planner_api.py scripts/test_recommendation.py scripts/test_scoring.py`
+- Focused result: `97 passed in 30.33s`
+- Full backend command: `..\ReRoute_Backend\venv\Scripts\python.exe -m pytest -q`
+- Full backend result: `106 passed in 160.32s`
+- Warnings match the pre-change baseline: FastAPI startup-event deprecation and `test_database_connection` returning a value.
+
+### Changed AI/planner surfaces
+
+- `app/ai/csp.py`
+- `app/ai/bayesian_risk.py`
+- `app/ai/graph.py`
+- `app/ai/scoring.py`
+- `app/ai/disruption.py`
+- `app/ai/recommendation.py`
+- `app/config/industry.py`
+- `app/services/planner.py`
+- `app/api/planner.py`
+- `app/schemas/planner.py`
+- `app/services/planner_serializer.py`
+
+### Known evidence limits
+
+- The database provides supplier reliability but no route reliability history. Route and combined stockout probabilities are therefore returned as `null` for plans that include routes without observed reliability; `plan_risk` is explicitly partial and uses supplier evidence only.
+- The configured profile service-level threshold is applied to stored supplier reliability as a feasibility proxy. It is not presented as measured end-to-end service-level performance.
+- The Phase 2 identity-header limitation remains: identity headers require a trusted upstream auth layer and are not cryptographic authentication.

@@ -101,3 +101,32 @@ Expose the real supply-chain entity management layer and scenario execution API 
 ### Stable checkpoint
 
 Phase 2 is considered complete when the business API and regression suite pass without planner regressions.
+
+## Phase 3 — AI planning improvements
+
+### Objective
+
+Improve planner feasibility, reliability evidence, industry-aware decisions, deterministic scoring, and operational explanations without inventing missing evidence or changing persistent supply-chain data during simulations.
+
+### Scope
+
+- Enforce each industry's minimum supplier reliability in candidate eligibility
+- Search alternate routes after a cheapest-path candidate fails CSP constraints
+- Validate path consistency, route/resource capacity, inventory, deadlines, and path-derived metrics
+- Calculate reliability risk from stored supplier values and route values only when present; label incomplete risk evidence explicitly
+- Expose deterministic score weights, normalization, tie-breaking, and rejected-candidate reasons
+- Apply one demand-spike quantity policy: ceiling fractional post-spike demand to whole units
+- Distinguish infeasible requests from internal planner failures
+- Keep disruption simulations isolated from the persisted database and base graph
+
+### Evidence and policy decisions
+
+- `IndustryProfile.min_service_level` is treated as the minimum supplier reliability for eligibility; this is based on the existing observed supplier reliability column, not a claim about end-to-end service fulfillment.
+- The database has supplier reliability but no route reliability history. Missing route evidence remains unknown instead of receiving a default probability.
+- Cost, delivery time, and risk use min-max normalization across the current feasible candidates. Scores are a deterministic weighted sum and are not comparable across candidate sets without that context.
+- Fractional demand after a spike is rounded upward with `ceil` so planning never understates required whole units.
+- No feasible route/candidate is a domain result (`409`); unexpected computation errors are not reported as client mistakes (`500`).
+
+### Stable checkpoint
+
+Phase 3 is accepted when the focused AI tests and full backend regression suite pass, the API contract reflects the evidence limits, and only intended Phase 3 files are committed.

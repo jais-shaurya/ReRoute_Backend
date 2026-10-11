@@ -1,8 +1,10 @@
 from app.database.connection import SessionLocal
+from app.database.models import Supplier
 from app.ai.graph import build_supply_chain_graph
 from app.ai.disruption import (
     simulate_supplier_failure,
     simulate_demand_spike,
+    round_spiked_quantity,
 )
 
 
@@ -90,9 +92,7 @@ def test_demand_spike(graph):
         percentage
     )
 
-    expected_demand = (
-        original_demand * 1.20
-    )
+    expected_demand = round_spiked_quantity(original_demand, percentage)
 
     actual_demand = scenario.nodes[
         customer_node
@@ -112,6 +112,43 @@ def test_demand_spike(graph):
     print(f"New demand: {actual_demand}")
     print("Base graph preserved: YES")
     print("TEST 2 PASSED")
+
+
+def test_demand_spike_rounding_boundaries():
+    assert round_spiked_quantity(42, 0) == 42
+    assert round_spiked_quantity(42, 1) == 43
+    assert round_spiked_quantity(42, 50) == 63
+    assert round_spiked_quantity(42, 100) == 84
+
+
+def test_demand_spike_rejects_non_finite_percentage():
+    try:
+        round_spiked_quantity(42, float("inf"))
+    except ValueError as exc:
+        assert "finite" in str(exc)
+    else:
+        raise AssertionError("Expected a non-finite percentage to be rejected")
+
+
+def test_supplier_failure_simulation_does_not_mutate_database(graph):
+    supplier_node = next(
+        node
+        for node, data in graph.nodes(data=True)
+        if data["node_type"] == "supplier"
+    )
+    supplier_id = graph.nodes[supplier_node]["database_id"]
+    db = SessionLocal()
+    try:
+        original_availability = db.get(Supplier, supplier_id).available
+        simulate_supplier_failure(graph, supplier_id)
+    finally:
+        db.close()
+
+    verification_db = SessionLocal()
+    try:
+        assert verification_db.get(Supplier, supplier_id).available == original_availability
+    finally:
+        verification_db.close()
 
 
 def test_invalid_supplier(graph):

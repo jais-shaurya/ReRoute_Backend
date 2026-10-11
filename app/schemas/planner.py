@@ -1,4 +1,5 @@
 from typing import Literal
+from math import isfinite
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
@@ -30,6 +31,8 @@ class ScoringWeightsRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_sum(self):
+        if not all(isfinite(value) for value in (self.cost, self.time, self.risk)):
+            raise ValueError("Scoring weights must be finite.")
         total = self.cost + self.time + self.risk
 
         if abs(total - 1.0) > 1e-9:
@@ -77,13 +80,7 @@ class PlannerRequest(BaseModel):
         gt=0,
     )
 
-    weights: ScoringWeightsRequest = Field(
-        default_factory=lambda: ScoringWeightsRequest(
-            cost=0.4,
-            time=0.3,
-            risk=0.3,
-        )
-    )
+    weights: ScoringWeightsRequest | None = None
 
     max_alternatives: int = Field(
         default=3,
@@ -93,7 +90,7 @@ class PlannerRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_industry_and_disruption_fields(self):
-        get_profile(self.industry)
+        profile = get_profile(self.industry)
 
         if self.disruption_type == "supplier_failure":
             if self.supplier_id is None:
@@ -109,13 +106,26 @@ class PlannerRequest(BaseModel):
                     "for demand_spike."
                 )
 
-            profile = get_profile(self.industry)
             if self.demand_spike_percentage > profile.max_demand_spike_percentage:
                 raise ValueError(
                     f"Demand spike percentage {self.demand_spike_percentage}% exceeds the "
                     f"{profile.name} profile maximum of "
                     f"{profile.max_demand_spike_percentage}% for feasible planning."
                 )
+
+        if self.disruption_type not in profile.allowed_disruption_types:
+            raise ValueError(
+                f"Disruption type '{self.disruption_type}' is not allowed for "
+                f"the {profile.name} profile."
+            )
+
+        if self.weights is None:
+            profile_weights = profile.default_weights
+            self.weights = ScoringWeightsRequest(
+                cost=profile_weights.cost_weight,
+                time=profile_weights.time_weight,
+                risk=profile_weights.risk_weight,
+            )
 
         return self
 
@@ -144,9 +154,11 @@ class CandidatePlanResponse(BaseModel):
 
 class RiskResponse(BaseModel):
     supplier_failure_probability: float
-    route_failure_probability: float
-    stockout_probability: float
+    route_failure_probability: float | None
+    stockout_probability: float | None
     plan_risk: float
+    risk_is_partial: bool
+    missing_evidence: list[str]
 
 
 # ============================================================
@@ -163,6 +175,9 @@ class ScoredPlanResponse(BaseModel):
 
     overall_score: float
     rank: int
+    cost_weight: float
+    time_weight: float
+    risk_weight: float
 
 
 # ============================================================
@@ -206,3 +221,10 @@ class PlannerResponse(BaseModel):
     scenario: ScenarioResponse
 
     candidate_plans: list[ScoredPlanResponse]
+    rejected_candidates: list["CandidateRejectionResponse"] = Field(default_factory=list)
+
+
+class CandidateRejectionResponse(BaseModel):
+    supplier_id: int
+    path: list[str]
+    reasons: list[str]

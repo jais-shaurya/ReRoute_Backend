@@ -29,6 +29,7 @@ from app.schemas.business import (
     WarehouseUpdateRequest,
 )
 from app.security.auth import get_current_user, require_role, require_tenant_scope
+from app.services.planner import InfeasiblePlanningError
 from app.services.business import BusinessService
 
 router = APIRouter(prefix="/api/business", tags=["Business"])
@@ -479,7 +480,10 @@ def execute_scenario(
     current_user: AppUser = Depends(require_role("admin", "planner")),
 ):
     service = BusinessService(db)
-    run = service.execute_scenario(scenario_id, current_user)
+    try:
+        run = service.execute_scenario(scenario_id, current_user)
+    except InfeasiblePlanningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _serialize_run(run)
 
 

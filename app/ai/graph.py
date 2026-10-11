@@ -132,6 +132,7 @@ def build_supply_chain_graph(session: Session) -> nx.DiGraph:
                 delivery_time_days=route.delivery_time_days,
                 capacity=route.capacity,
                 available=route.available,
+                reliability=getattr(route, "reliability", None),
             )
 
     return graph

@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from math import ceil
 from uuid import uuid4
 
 from app.main import app
@@ -33,6 +34,9 @@ def test_business_scenario_execute_and_history():
     with TestClient(app) as client:
         headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
         scenario_name = f"Demand spike {uuid4().hex[:8]}"
+        customer = client.get("/api/business/customers/1", headers=headers)
+        assert customer.status_code == 200
+        expected_quantity = ceil(customer.json()["demand"] * 1.2)
 
         scenario = client.post(
             "/api/business/scenarios",
@@ -53,6 +57,7 @@ def test_business_scenario_execute_and_history():
         run_data = run.json()
         assert run_data["requested_customer_id"] == 1
         assert run_data["status"] == "completed"
+        assert run_data["result_payload"]["scenario"]["quantity"] == expected_quantity
 
         history = client.get("/api/business/planning-runs", headers=headers)
         assert history.status_code == 200
@@ -96,6 +101,31 @@ def test_scenario_rejects_customer_outside_organization_scope():
             headers={"X-User-Id": "1", "X-Organization-Id": "1"},
         )
         assert response.status_code == 404
+
+
+def test_business_scenario_infeasibility_returns_conflict_with_reasons():
+    with TestClient(app) as client:
+        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
+        scenario = client.post(
+            "/api/business/scenarios",
+            json={
+                "name": f"Over capacity {uuid4().hex[:8]}",
+                "scenario_type": "none",
+                "customer_id": 1,
+                "quantity": 1000000,
+            },
+            headers=headers,
+        )
+        assert scenario.status_code == 201, scenario.text
+
+        response = client.post(
+            f"/api/business/scenarios/{scenario.json()['id']}/execute",
+            headers=headers,
+        )
+
+        assert response.status_code == 409
+        assert "No feasible recovery plans" in response.json()["detail"]
+        assert "supplier capacity" in response.json()["detail"]
 
 
 def test_route_validation_and_issue():

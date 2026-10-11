@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import isfinite
 from typing import Optional
 
 import networkx as nx
@@ -23,6 +24,19 @@ class CandidatePlan:
 
     factory_id: Optional[int] = None
     warehouse_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class CandidateRejection:
+    supplier_id: int
+    path: tuple[str, ...]
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CandidateSearchResult:
+    plans: tuple[CandidatePlan, ...]
+    rejected_candidates: tuple[CandidateRejection, ...]
 
 
 def _extract_node_id(
@@ -68,7 +82,32 @@ def candidate_plan_from_astar(
         customer_id
     )
 
-    path = result["path"]
+    return candidate_plan_from_path(
+        graph,
+        result["path"],
+        supplier_id,
+        customer_id,
+        quantity,
+    )
+
+
+def candidate_plan_from_path(
+    graph: nx.DiGraph,
+    path: list[str],
+    supplier_id: int,
+    customer_id: int,
+    quantity: int,
+) -> CandidatePlan:
+    total_cost = 0.0
+    total_days = 0
+    for source, destination in zip(path, path[1:]):
+        edge = graph.edges[source, destination]
+        edge_cost = edge.get("transportation_cost")
+        edge_days = edge.get("delivery_time_days")
+        if isinstance(edge_cost, (int, float)) and not isinstance(edge_cost, bool):
+            total_cost += edge_cost
+        if isinstance(edge_days, int) and not isinstance(edge_days, bool):
+            total_days += edge_days
 
     factory_id = None
     warehouse_id = None
@@ -96,8 +135,8 @@ def candidate_plan_from_astar(
         customer_id=customer_id,
         quantity=quantity,
         path=path,
-        total_cost=result["total_cost"],
-        total_days=result["total_days"],
+        total_cost=round(total_cost, 2),
+        total_days=total_days,
         factory_id=factory_id,
         warehouse_id=warehouse_id,
     )
@@ -129,6 +168,21 @@ def validate_candidate_plan(
 
     violations = []
 
+    quantity_is_integer = isinstance(plan.quantity, int) and not isinstance(plan.quantity, bool)
+    if not quantity_is_integer:
+        violations.append("Plan quantity must be an integer.")
+    if not isinstance(plan.total_cost, (int, float)) or isinstance(plan.total_cost, bool):
+        violations.append("Plan total cost must be numeric.")
+    elif not isfinite(float(plan.total_cost)) or plan.total_cost < 0:
+        violations.append("Plan total cost must be finite and non-negative.")
+    if not isinstance(plan.total_days, int) or isinstance(plan.total_days, bool):
+        violations.append("Plan delivery time must be a non-negative integer.")
+    elif plan.total_days < 0:
+        violations.append("Plan delivery time must be a non-negative integer.")
+
+    if violations:
+        return False, violations
+
     supplier_node = f"supplier:{plan.supplier_id}"
     customer_node = f"customer:{plan.customer_id}"
 
@@ -152,7 +206,7 @@ def validate_candidate_plan(
     # Quantity validation
     # -----------------------------------------------------
 
-    if plan.quantity <= 0:
+    if quantity_is_integer and plan.quantity <= 0:
         violations.append(
             "Plan quantity must be greater than zero."
         )
@@ -164,7 +218,7 @@ def validate_candidate_plan(
         0
     )
 
-    if plan.quantity != customer_demand:
+    if quantity_is_integer and plan.quantity != customer_demand:
         violations.append(
             f"Demand violation: plan quantity "
             f"{plan.quantity} does not satisfy "
@@ -191,7 +245,12 @@ def validate_candidate_plan(
         0
     )
 
-    if plan.quantity > supplier_capacity:
+    if (
+        not isinstance(supplier_capacity, (int, float))
+        or isinstance(supplier_capacity, bool)
+        or not isfinite(float(supplier_capacity))
+        or plan.quantity > supplier_capacity
+    ):
         violations.append(
             f"Supplier capacity violation: "
             f"quantity {plan.quantity} exceeds "
@@ -207,6 +266,13 @@ def validate_candidate_plan(
             "Candidate plan contains an empty path."
         )
         return False, violations
+
+    if len(set(plan.path)) != len(plan.path):
+        violations.append("Candidate path cannot visit the same node more than once.")
+
+    observed_cost = 0.0
+    observed_days = 0
+    has_complete_route_metrics = True
 
     if plan.path[0] != supplier_node:
         violations.append(
@@ -242,6 +308,29 @@ def validate_candidate_plan(
             destination
         ]
 
+        route_cost = edge.get("transportation_cost")
+        if (
+            not isinstance(route_cost, (int, float))
+            or isinstance(route_cost, bool)
+            or not isfinite(float(route_cost))
+            or route_cost < 0
+        ):
+            violations.append(
+                f"Route {source} -> {destination} has missing or invalid transportation cost."
+            )
+            has_complete_route_metrics = False
+        else:
+            observed_cost += route_cost
+
+        route_days = edge.get("delivery_time_days")
+        if not isinstance(route_days, int) or isinstance(route_days, bool) or route_days < 0:
+            violations.append(
+                f"Route {source} -> {destination} has missing or invalid delivery time."
+            )
+            has_complete_route_metrics = False
+        else:
+            observed_days += route_days
+
         # Route availability
         if not edge.get("available", True):
             violations.append(
@@ -255,7 +344,12 @@ def validate_candidate_plan(
             0
         )
 
-        if plan.quantity > route_capacity:
+        if (
+            not isinstance(route_capacity, (int, float))
+            or isinstance(route_capacity, bool)
+            or not isfinite(float(route_capacity))
+            or plan.quantity > route_capacity
+        ):
             violations.append(
                 f"Route capacity violation: "
                 f"{source} -> {destination} "
@@ -263,81 +357,81 @@ def validate_candidate_plan(
                 f"but plan requires {plan.quantity}."
             )
 
-    # -----------------------------------------------------
-    # Factory validation
-    # -----------------------------------------------------
+    if has_complete_route_metrics:
+        if (
+            isinstance(plan.total_cost, (int, float))
+            and not isinstance(plan.total_cost, bool)
+            and isfinite(float(plan.total_cost))
+            and abs(float(plan.total_cost) - round(observed_cost, 2)) > 1e-6
+        ):
+            violations.append(
+                "Candidate total cost does not match the route costs on its path."
+            )
+        if (
+            isinstance(plan.total_days, int)
+            and not isinstance(plan.total_days, bool)
+            and plan.total_days != observed_days
+        ):
+            violations.append(
+                "Candidate delivery time does not match the route times on its path."
+            )
 
-    if plan.factory_id is not None:
-
-        factory_node = f"factory:{plan.factory_id}"
-
-        if factory_node in graph:
-
-            factory = graph.nodes[
-                factory_node
-            ]
-
-            if not factory.get(
-                "available",
-                True
+    path_factory_ids = []
+    path_warehouse_ids = []
+    for node in plan.path[1:-1]:
+        if node not in graph:
+            continue
+        attributes = graph.nodes[node]
+        node_type = attributes.get("node_type")
+        database_id = attributes.get("database_id")
+        if node_type == "factory":
+            path_factory_ids.append(database_id)
+            if not attributes.get("available", True):
+                violations.append(f"Factory {database_id} is unavailable.")
+            capacity = attributes.get("capacity")
+            if (
+                not isinstance(capacity, (int, float))
+                or isinstance(capacity, bool)
+                or not isfinite(float(capacity))
+                or plan.quantity > capacity
             ):
                 violations.append(
-                    f"Factory {plan.factory_id} "
-                    f"is unavailable."
+                    f"Factory capacity violation: quantity {plan.quantity} "
+                    f"exceeds factory {database_id} capacity {capacity}."
                 )
-
-            factory_capacity = factory.get(
-                "capacity",
-                0
-            )
-
-            if plan.quantity > factory_capacity:
+        elif node_type == "warehouse":
+            path_warehouse_ids.append(database_id)
+            if not attributes.get("available", True):
+                violations.append(f"Warehouse {database_id} is unavailable.")
+            capacity = attributes.get("capacity")
+            inventory = attributes.get("inventory")
+            if (
+                not isinstance(capacity, (int, float))
+                or isinstance(capacity, bool)
+                or not isfinite(float(capacity))
+                or plan.quantity > capacity
+            ):
                 violations.append(
-                    f"Factory capacity violation: "
-                    f"quantity {plan.quantity} exceeds "
-                    f"factory capacity {factory_capacity}."
+                    f"Warehouse capacity violation: quantity {plan.quantity} "
+                    f"exceeds warehouse {database_id} capacity {capacity}."
                 )
-
-    # -----------------------------------------------------
-    # Warehouse validation
-    # -----------------------------------------------------
-
-    if plan.warehouse_id is not None:
-
-        warehouse_node = (
-            f"warehouse:{plan.warehouse_id}"
-        )
-
-        if warehouse_node in graph:
-
-            warehouse = graph.nodes[
-                warehouse_node
-            ]
-
-            warehouse_capacity = warehouse.get(
-                "capacity",
-                0
-            )
-
-            if plan.quantity > warehouse_capacity:
+            if (
+                not isinstance(inventory, (int, float))
+                or isinstance(inventory, bool)
+                or not isfinite(float(inventory))
+                or plan.quantity > inventory
+            ):
                 violations.append(
-                    f"Warehouse capacity violation: "
-                    f"quantity {plan.quantity} exceeds "
-                    f"warehouse capacity "
-                    f"{warehouse_capacity}."
+                    f"Warehouse inventory violation: quantity {plan.quantity} "
+                    f"exceeds warehouse {database_id} inventory {inventory}."
                 )
 
-            inventory = warehouse.get(
-                "inventory",
-                0
-            )
-
-            if plan.quantity > inventory:
-                violations.append(
-                    f"Warehouse inventory violation: "
-                    f"quantity {plan.quantity} exceeds "
-                    f"available inventory {inventory}."
-                )
+    if plan.factory_id not in path_factory_ids:
+        if plan.factory_id is not None or path_factory_ids:
+            violations.append("Candidate factory_id does not match its path.")
+    if plan.warehouse_id not in path_warehouse_ids:
+        if plan.warehouse_id is not None or path_warehouse_ids:
+            violations.append("Candidate warehouse_id does not match its path.")
 
     # -----------------------------------------------------
     # Deadline validation
@@ -363,93 +457,138 @@ def validate_candidate_plan(
     )
 
 
+def search_feasible_plans(
+    graph: nx.DiGraph,
+    customer_id: int,
+    quantity: int,
+    min_supplier_reliability: float = 0.0,
+) -> CandidateSearchResult:
+    """
+    Find the least-cost feasible simple path for each supplier and retain
+    rejection reasons for suppliers and paths that cannot satisfy the CSP.
+    """
+    if quantity <= 0:
+        raise ValueError("Planning quantity must be greater than zero.")
+    if not isfinite(min_supplier_reliability) or not 0.0 <= min_supplier_reliability <= 1.0:
+        raise ValueError("Minimum supplier reliability must be between 0 and 1.")
+
+    customer_node = f"customer:{customer_id}"
+    if customer_node not in graph:
+        return CandidateSearchResult((), ())
+
+    path_graph = graph.copy()
+    path_graph.remove_edges_from(
+        [
+            (source, destination)
+            for source, destination, edge in graph.edges(data=True)
+            if not edge.get("available", True)
+        ]
+    )
+    path_graph.remove_nodes_from(
+        [
+            node
+            for node, data in graph.nodes(data=True)
+            if data.get("node_type") in {"factory", "warehouse"}
+            and not data.get("available", True)
+        ]
+    )
+
+    plans: list[CandidatePlan] = []
+    rejected: list[CandidateRejection] = []
+    supplier_nodes = sorted(
+        (
+            node
+            for node, data in graph.nodes(data=True)
+            if data.get("node_type") == "supplier"
+        ),
+        key=lambda node: graph.nodes[node].get("database_id", _extract_node_id(node, "supplier")),
+    )
+
+    for supplier_node in supplier_nodes:
+        supplier_id = _extract_node_id(supplier_node, "supplier")
+        supplier = graph.nodes[supplier_node]
+        supplier_reasons = []
+
+        if not supplier.get("available", True):
+            supplier_reasons.append("supplier is unavailable")
+        capacity = supplier.get("capacity")
+        if capacity is None or quantity > capacity:
+            supplier_reasons.append(
+                f"supplier capacity {capacity} is below required quantity {quantity}"
+            )
+        reliability = supplier.get("reliability")
+        if reliability is None:
+            if min_supplier_reliability > 0:
+                supplier_reasons.append(
+                    "supplier reliability is unknown and cannot satisfy the "
+                    f"minimum service level {min_supplier_reliability:.3f}"
+                )
+        else:
+            if not isinstance(reliability, (int, float)) or isinstance(reliability, bool):
+                raise ValueError(f"Supplier {supplier_id} reliability must be numeric.")
+            if not isfinite(float(reliability)) or not 0.0 <= reliability <= 1.0:
+                raise ValueError(f"Supplier {supplier_id} reliability must be between 0 and 1.")
+            if reliability < min_supplier_reliability:
+                supplier_reasons.append(
+                    f"supplier reliability {reliability:.3f} is below minimum "
+                    f"service level {min_supplier_reliability:.3f}"
+                )
+
+        if supplier_reasons:
+            rejected.append(CandidateRejection(supplier_id, (), tuple(supplier_reasons)))
+            continue
+
+        found_path = False
+        try:
+            path_iterator = nx.shortest_simple_paths(
+                path_graph,
+                supplier_node,
+                customer_node,
+                weight="transportation_cost",
+            )
+            for path in path_iterator:
+                plan = candidate_plan_from_path(
+                    graph,
+                    path,
+                    supplier_id,
+                    customer_id,
+                    quantity,
+                )
+                valid, violations = validate_candidate_plan(graph, plan)
+                if valid:
+                    plans.append(plan)
+                    found_path = True
+                    break
+                rejected.append(
+                    CandidateRejection(supplier_id, tuple(path), tuple(violations))
+                )
+        except nx.NetworkXNoPath:
+            pass
+
+        if not found_path and not any(item.supplier_id == supplier_id for item in rejected):
+            rejected.append(
+                CandidateRejection(
+                    supplier_id,
+                    (),
+                    ("no available route path reaches the requested customer",),
+                )
+            )
+
+    return CandidateSearchResult(tuple(plans), tuple(rejected))
+
+
 def generate_feasible_plans(
     graph: nx.DiGraph,
     customer_id: int,
-    quantity: int
+    quantity: int,
+    min_supplier_reliability: float = 0.0,
 ) -> list[CandidatePlan]:
-    """
-    Generate feasible recovery plans using
-    available suppliers and A*.
-
-    The function uses backtracking:
-    each available supplier is considered as a
-    candidate assignment, and infeasible candidates
-    are rejected by the CSP validator.
-    """
-
-    feasible_plans = []
-
-    suppliers = []
-
-    for node, data in graph.nodes(data=True):
-
-        if data.get("node_type") != "supplier":
-            continue
-
-        if not data.get("available", True):
-            continue
-
-        # -------------------------------------------------
-        # Forward checking:
-        # A supplier whose capacity cannot satisfy the
-        # required quantity is removed from the domain
-        # before backtracking begins.
-        # -------------------------------------------------
-
-        supplier_capacity = data.get(
-            "capacity",
-            0
-        )
-
-        if supplier_capacity < quantity:
-            continue
-
-        suppliers.append(node)
-
-    def backtrack(
-        supplier_nodes: list[str],
-        index: int
-    ) -> None:
-
-        if index >= len(supplier_nodes):
-            return
-
-        supplier_node = supplier_nodes[index]
-
-        supplier_id = _extract_node_id(
-            supplier_node,
-            "supplier"
-        )
-
-        try:
-            plan = candidate_plan_from_astar(
-                graph,
-                supplier_id,
-                customer_id,
-                quantity
-            )
-
-            is_valid, _ = validate_candidate_plan(
-                graph,
-                plan
-            )
-
-            if is_valid:
-                feasible_plans.append(plan)
-
-        except ValueError:
-            pass
-
-        # Backtrack to the next supplier
-        backtrack(
-            supplier_nodes,
-            index + 1
-        )
-
-    backtrack(
-        suppliers,
-        0
+    """Compatibility wrapper returning only CSP-feasible plans."""
+    return list(
+        search_feasible_plans(
+            graph,
+            customer_id,
+            quantity,
+            min_supplier_reliability,
+        ).plans
     )
-
-    return feasible_plans

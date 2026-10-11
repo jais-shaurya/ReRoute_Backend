@@ -374,12 +374,6 @@ class BusinessService:
             if graph.has_edge(source_node, destination_node):
                 graph.remove_edge(source_node, destination_node)
 
-        if scenario.supplier_id is not None:
-            graph = planner.apply_supplier_failure(graph, scenario.supplier_id)
-
-        if scenario.scenario_type == "demand_spike" and scenario.demand_spike_percentage is not None:
-            graph = planner.apply_demand_spike(graph, scenario.customer_id, scenario.demand_spike_percentage)
-
         disruption_type = None if scenario.scenario_type == "none" else scenario.scenario_type
         kwargs = {
             "customer_id": scenario.customer_id,
