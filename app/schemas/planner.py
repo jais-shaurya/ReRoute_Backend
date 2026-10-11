@@ -1,6 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
+
+from app.config.industry import get_profile
 
 # ============================================================
 # Disruption Requests
@@ -46,6 +48,14 @@ class PlannerRequest(BaseModel):
     customer_id: int = Field(gt=0)
     quantity: int = Field(gt=0)
 
+    industry: str = Field(
+        default="retail",
+        validation_alias=AliasChoices(
+            "industry",
+            "industry_profile",
+        ),
+    )
+
     disruption_type: Literal[
         "none",
         "supplier_failure",
@@ -82,7 +92,9 @@ class PlannerRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_disruption_fields(self):
+    def validate_industry_and_disruption_fields(self):
+        get_profile(self.industry)
+
         if self.disruption_type == "supplier_failure":
             if self.supplier_id is None:
                 raise ValueError(
@@ -95,6 +107,14 @@ class PlannerRequest(BaseModel):
                 raise ValueError(
                     "demand_spike_percentage is required "
                     "for demand_spike."
+                )
+
+            profile = get_profile(self.industry)
+            if self.demand_spike_percentage > profile.max_demand_spike_percentage:
+                raise ValueError(
+                    f"Demand spike percentage {self.demand_spike_percentage}% exceeds the "
+                    f"{profile.name} profile maximum of "
+                    f"{profile.max_demand_spike_percentage}% for feasible planning."
                 )
 
         return self

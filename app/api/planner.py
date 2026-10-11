@@ -57,6 +57,7 @@ def recommend_plan(
             ),
             weights=weights,
             max_alternatives=request.max_alternatives,
+            industry=request.industry,
         )
 
         return serialize_planner_result(result)

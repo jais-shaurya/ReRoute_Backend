@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from math import ceil
 
 import networkx as nx
 from sqlalchemy.orm import Session
@@ -26,6 +27,7 @@ from app.ai.scoring import (
     ScoringWeights,
     score_plans,
 )
+from app.config.industry import validate_industry_configuration
 
 
 @dataclass(frozen=True)
@@ -218,6 +220,7 @@ class PlannerService:
         demand_spike_percentage: float | None = None,
         weights: ScoringWeights | None = None,
         max_alternatives: int = 3,
+        industry: str | None = None,
     ) -> PlannerResult:
         """
         Execute the complete ReRoute planning pipeline.
@@ -260,6 +263,15 @@ class PlannerService:
                 "max_alternatives cannot be negative."
             )
 
+        profile = validate_industry_configuration(
+            industry,
+            demand_spike_percentage=demand_spike_percentage,
+            weights=weights,
+        )
+
+        if weights is None:
+            weights = profile.default_weights
+
         # ----------------------------------------------------
         # Build base graph
         # ----------------------------------------------------
@@ -297,7 +309,8 @@ class PlannerService:
         scenario_quantity = quantity
 
         if disruption_type is None:
-            scenario_graph = graph
+            scenario_graph = graph.copy()
+            scenario_graph.nodes[customer_node]["demand"] = quantity
 
             scenario = PlannerScenario(
                 type="none",
@@ -317,6 +330,7 @@ class PlannerService:
                 graph,
                 supplier_id,
             )
+            scenario_graph.nodes[customer_node]["demand"] = quantity
 
             scenario = PlannerScenario(
                 type="supplier_failure",
@@ -358,7 +372,8 @@ class PlannerService:
                     "value after demand spike."
                 )
 
-            scenario_quantity = int(updated_demand)
+            scenario_quantity = ceil(updated_demand)
+            scenario_graph.nodes[customer_node]["demand"] = scenario_quantity
 
             if scenario_quantity <= 0:
                 raise ValueError(
