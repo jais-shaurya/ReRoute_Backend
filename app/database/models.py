@@ -192,6 +192,7 @@ class AppUser(Base):
     email: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
     full_name: Mapped[str] = mapped_column(String(160), nullable=False)
     role: Mapped[str] = mapped_column(String(40), nullable=False, default="planner")
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     organization_id: Mapped[int] = mapped_column(
         ForeignKey("organizations.id"),
         nullable=False,

@@ -93,12 +93,12 @@ class PlannerService:
     # Graph
     # ========================================================
 
-    def build_graph(self) -> nx.DiGraph:
+    def build_graph(self, organization_id: int | None = None) -> nx.DiGraph:
         """
         Build a fresh supply-chain graph from the database.
         """
 
-        return build_supply_chain_graph(self.session)
+        return build_supply_chain_graph(self.session, organization_id)
 
     # ========================================================
     # Scenario
@@ -254,6 +254,7 @@ class PlannerService:
         max_alternatives: int = 3,
         industry: str | None = None,
         base_graph: nx.DiGraph | None = None,
+        current_organization_id: int | None = None,
     ) -> PlannerResult:
         """
         Execute the complete ReRoute planning pipeline.
@@ -310,7 +311,12 @@ class PlannerService:
         # Build base graph
         # ----------------------------------------------------
 
-        graph = base_graph.copy() if base_graph is not None else self.build_graph()
+        if base_graph is not None:
+            graph = base_graph.copy()
+        elif current_organization_id is not None:
+            graph = self.build_graph(current_organization_id)
+        else:
+            graph = self.build_graph()
 
         # ----------------------------------------------------
         # Validate selected customer

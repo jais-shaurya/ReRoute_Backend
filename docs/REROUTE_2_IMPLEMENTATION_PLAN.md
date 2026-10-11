@@ -130,3 +130,30 @@ Improve planner feasibility, reliability evidence, industry-aware decisions, det
 ### Stable checkpoint
 
 Phase 3 is accepted when the focused AI tests and full backend regression suite pass, the API contract reflects the evidence limits, and only intended Phase 3 files are committed.
+
+## Phase 4 — Backend security and quality hardening
+
+### Objective
+
+Replace forgeable identity-header trust with verifiable authentication, enforce persisted RBAC and organization scope, reduce configuration exposure, and manage schema changes with safe migrations.
+
+### Scope
+
+- Verify signed, short-lived Bearer tokens and hash passwords using Argon2
+- Resolve active users and roles from the database; ignore all client-supplied identity/role headers
+- Protect planner and business routes; restrict user provisioning and prevent API assignment of administrator roles
+- Scope planner graph data, entities, scenarios, histories, and comparisons to the token user's organization
+- Configure exact-origin CORS, fail closed when token signing configuration is absent, and keep internal errors generic
+- Add Alembic revisions that preserve existing data and avoid automatic destructive downgrades
+- Provide trusted operator provisioning for initial and legacy administrator accounts
+
+### Verified implementation decisions
+
+- HS256 access token lifetime is 15 minutes; required key setting is `REROUTE_AUTH_SECRET` with a 32-byte minimum.
+- API user provisioning may assign planner/analyst/reader only; administrator grants require direct trusted operator provisioning.
+- Existing schema migration uses `create_all(checkfirst=True)` only as a non-destructive baseline for missing tables, then guarded column addition and one-organization-only legacy scope assignment.
+- Applications no longer mutate schema or create a default admin on startup.
+
+### Stable checkpoint
+
+Phase 4 is accepted after focused security/migration tests, one final full backend regression run, documentation update, and a commit containing only intended Phase 4 files.

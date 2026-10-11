@@ -149,7 +149,7 @@ def create_organization_user(
     organization_id: int,
     payload: UserCreateRequest,
     db=Depends(get_db),
-    current_user: AppUser = Depends(require_role("admin", "planner")),
+    current_user: AppUser = Depends(require_role("admin")),
 ):
     service = BusinessService(db)
     user = service.create_user(organization_id, payload, current_user)

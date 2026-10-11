@@ -20,6 +20,7 @@ from app.database.models import (
     Warehouse,
 )
 from app.services.planner import PlannerService
+from app.security.auth import hash_password
 
 
 class BusinessService:
@@ -480,8 +481,10 @@ class BusinessService:
 
     def create_user(self, organization_id: int, payload, current_user: AppUser):
         self._ensure_user_scope(current_user, organization_id)
-        if current_user.role not in {"admin", "planner"}:
+        if current_user.role != "admin":
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to create team members.")
+        if payload.role == "admin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator roles can only be provisioned by an operator.")
         existing = self.db.query(AppUser).filter_by(email=payload.email.lower()).first()
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists.")
@@ -489,6 +492,7 @@ class BusinessService:
             email=payload.email.lower(),
             full_name=payload.full_name,
             role=payload.role,
+            password_hash=hash_password(payload.password),
             organization_id=organization_id,
         )
         self.db.add(user)

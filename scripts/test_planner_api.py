@@ -1,9 +1,13 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.security.auth import create_access_token
 
 
-client = TestClient(app)
+client = TestClient(
+    app,
+    headers={"Authorization": f"Bearer {create_access_token(1)}"},
+)
 
 
 def test_health_endpoint():

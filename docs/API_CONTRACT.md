@@ -90,17 +90,32 @@ Each scored candidate includes the weights used. The explanation presents the we
 
 ## Business API security and tenant isolation
 
-All business endpoints under `/api/business` require identity headers:
+All business and planner endpoints require a signed access token:
 
-- `X-User-Id`
-- `X-Organization-Id`
-- optional `X-User-Role` (must match the persisted role)
+`POST /api/auth/token` accepts JSON `{ "email": "...", "password": "..." }` and returns an HS256 Bearer token valid for 15 minutes. Send it as `Authorization: Bearer <access_token>`. Passwords are stored using Argon2 hashes and are never returned by user-management endpoints.
 
-Requests without the required user and organization headers return `401`. The service validates that the user belongs to the target organization and rejects cross-tenant access with `403`.
+Tokens require a configured `REROUTE_AUTH_SECRET` of at least 32 bytes. If it is missing or too short, token-protected requests fail closed with `503`; no default production secret is supplied. Generate and inject a high-entropy value through the deployment secret manager. The user ID in the signed token is resolved against the database on each request, so inactive/deleted users are rejected and the persisted role is authoritative.
 
-These headers provide identity context only; they do not cryptographically authenticate a client. Production deployments must set them through trusted authentication middleware or an API gateway and must not expose direct client control over these values.
+Legacy `X-User-Id`, `X-Organization-Id`, and `X-User-Role` headers are ignored and do not authenticate or select a tenant. Their previous limitation still applies: identity/role headers are not cryptographic credentials and must not be trusted if reintroduced by a deployment gateway.
+
+RBAC policy:
+
+- `admin` and `planner` can create/update supply-chain entities and create/execute scenarios.
+- Only `admin` can delete entities or provision organization users.
+- User provisioning accepts `planner`, `analyst`, or `reader`; API callers cannot assign the `admin` role. Initial or replacement administrators are provisioned through the operator-only `scripts/provision_admin.py` CLI.
+- The public planner route also requires Bearer authentication and builds its graph only from the authenticated organization's `organization_entity_access` rows.
+
+`REROUTE_CORS_ORIGINS` is a comma-separated exact-origin allowlist. Its local development default is `http://localhost:5500,http://127.0.0.1:5500`; wildcards are rejected, credentials are disabled, and only the required methods and `Authorization`/`Content-Type` headers are allowed.
 
 Organization-scoped entity access is enforced against the live database using an `organization_entity_access` join table. This prevents a user from changing an ID to read or write another organization's supplier, customer, warehouse, factory, or route records.
+
+## Schema migrations and operator setup
+
+Schema changes are applied explicitly with `alembic upgrade head`; application startup no longer runs `create_all` or inserts a default administrator. `DATABASE_URL` must target the intended database. The initial Alembic revision idempotently creates missing tables without altering existing ones; the next revision adds nullable `app_users.password_hash` and assigns legacy supply-chain rows to the sole existing organization only when exactly one organization is present. It does not delete or overwrite rows. If a legacy database has multiple organizations, ownership is ambiguous and no automatic legacy assignments are made.
+
+After migration, operators provision the first/reset administrator with `python scripts/provision_admin.py` using a trusted database-capable environment. Legacy accounts have no password hash and cannot log in until an operator sets one. New deployments must provision an organization/admin before API use. Future schema changes require explicit reviewed Alembic revisions; automatic downgrade is intentionally disabled for these data-bearing revisions.
+
+This boundary verifies signed application tokens but does not provide refresh tokens, MFA, brute-force/rate limiting, email verification, or external identity federation. Deployments must protect the signing key, rate-limit `/api/auth/token`, use TLS, restrict database access, and perform password reset/provisioning through trusted operators.
 
 ## Business entity endpoints
 

@@ -1,15 +1,20 @@
-from fastapi.testclient import TestClient
 from math import ceil
 from uuid import uuid4
 
+from fastapi.testclient import TestClient
+
 from app.main import app
+from app.security.auth import create_access_token
+
+
+def auth_headers(user_id=1, **extra):
+    return {"Authorization": f"Bearer {create_access_token(user_id)}", **extra}
 
 
 def test_business_entities_list_and_create():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
+        headers = auth_headers()
         supplier_code = f"SUP-{uuid4().hex[:8].upper()}"
-
         suppliers = client.get("/api/business/suppliers", headers=headers)
         assert suppliers.status_code == 200
         assert len(suppliers.json()) >= 1
@@ -32,8 +37,7 @@ def test_business_entities_list_and_create():
 
 def test_business_scenario_execute_and_history():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
-        scenario_name = f"Demand spike {uuid4().hex[:8]}"
+        headers = auth_headers()
         customer = client.get("/api/business/customers/1", headers=headers)
         assert customer.status_code == 200
         expected_quantity = ceil(customer.json()["demand"] * 1.2)
@@ -41,7 +45,7 @@ def test_business_scenario_execute_and_history():
         scenario = client.post(
             "/api/business/scenarios",
             json={
-                "name": scenario_name,
+                "name": f"Demand spike {uuid4().hex[:8]}",
                 "scenario_type": "demand_spike",
                 "customer_id": 1,
                 "quantity": 42,
@@ -50,9 +54,10 @@ def test_business_scenario_execute_and_history():
             headers=headers,
         )
         assert scenario.status_code == 201, scenario.text
-        scenario_id = scenario.json()["id"]
-
-        run = client.post(f"/api/business/scenarios/{scenario_id}/execute", headers=headers)
+        run = client.post(
+            f"/api/business/scenarios/{scenario.json()['id']}/execute",
+            headers=headers,
+        )
         assert run.status_code == 200, run.text
         run_data = run.json()
         assert run_data["requested_customer_id"] == 1
@@ -64,28 +69,31 @@ def test_business_scenario_execute_and_history():
         assert any(item["id"] == run_data["id"] for item in history.json())
 
 
-def test_cross_organization_access_forbidden():
+def test_legacy_identity_headers_are_not_authentication():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "2"}
-
-        response = client.get("/api/business/customers", headers=headers)
-        assert response.status_code == 403
-
-
-def test_business_api_requires_authentication_and_rejects_role_escalation():
-    with TestClient(app) as client:
-        missing_auth = client.get("/api/business/customers")
-        assert missing_auth.status_code == 401
-
-        escalated_role = client.get(
+        response = client.get(
             "/api/business/customers",
             headers={
                 "X-User-Id": "1",
                 "X-Organization-Id": "1",
-                "X-User-Role": "reader",
+                "X-User-Role": "admin",
             },
         )
-        assert escalated_role.status_code == 403
+        assert response.status_code == 401
+
+
+def test_legacy_headers_cannot_change_authenticated_tenant():
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/business/customers",
+            headers=auth_headers(
+                X_User_Id="999999",
+                X_Organization_Id="999999",
+                X_User_Role="reader",
+            ),
+        )
+        assert response.status_code == 200
+        assert response.json()
 
 
 def test_scenario_rejects_customer_outside_organization_scope():
@@ -98,14 +106,14 @@ def test_scenario_rejects_customer_outside_organization_scope():
                 "customer_id": 999999,
                 "quantity": 12,
             },
-            headers={"X-User-Id": "1", "X-Organization-Id": "1"},
+            headers=auth_headers(),
         )
         assert response.status_code == 404
 
 
 def test_business_scenario_infeasibility_returns_conflict_with_reasons():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
+        headers = auth_headers()
         scenario = client.post(
             "/api/business/scenarios",
             json={
@@ -122,7 +130,6 @@ def test_business_scenario_infeasibility_returns_conflict_with_reasons():
             f"/api/business/scenarios/{scenario.json()['id']}/execute",
             headers=headers,
         )
-
         assert response.status_code == 409
         assert "No feasible recovery plans" in response.json()["detail"]
         assert "supplier capacity" in response.json()["detail"]
@@ -130,8 +137,6 @@ def test_business_scenario_infeasibility_returns_conflict_with_reasons():
 
 def test_route_validation_and_issue():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
-
         invalid = client.post(
             "/api/business/routes",
             json={
@@ -145,25 +150,22 @@ def test_route_validation_and_issue():
                 "capacity": 0,
                 "available": True,
             },
-            headers=headers,
+            headers=auth_headers(),
         )
         assert invalid.status_code == 422
 
 
 def test_recommendation_comparison_endpoint():
     with TestClient(app) as client:
-        headers = {"X-User-Id": "1", "X-Organization-Id": "1"}
+        headers = auth_headers()
         history = client.get("/api/business/planning-runs", headers=headers)
-        if history.status_code != 200:
-            assert False, history.text
-
+        assert history.status_code == 200
         payload = history.json()
         if not payload:
-            scenario_name = f"Compare plan {uuid4().hex[:8]}"
             scenario = client.post(
                 "/api/business/scenarios",
                 json={
-                    "name": scenario_name,
+                    "name": f"Compare plan {uuid4().hex[:8]}",
                     "scenario_type": "demand_spike",
                     "customer_id": 1,
                     "quantity": 10,
@@ -172,15 +174,24 @@ def test_recommendation_comparison_endpoint():
                 headers=headers,
             )
             assert scenario.status_code == 201, scenario.text
-            run = client.post(f"/api/business/scenarios/{scenario.json()['id']}/execute", headers=headers)
+            run = client.post(
+                f"/api/business/scenarios/{scenario.json()['id']}/execute",
+                headers=headers,
+            )
             assert run.status_code == 200, run.text
             payload = client.get("/api/business/planning-runs", headers=headers).json()
 
         run_id = payload[0]["id"]
-        comparison = client.get(f"/api/business/planning-runs/{run_id}/comparison", headers=headers)
+        comparison = client.get(
+            f"/api/business/planning-runs/{run_id}/comparison",
+            headers=headers,
+        )
         assert comparison.status_code == 200
         assert "selected_plan" in comparison.json()
 
-        explanation = client.get(f"/api/business/planning-runs/{run_id}/explanation", headers=headers)
+        explanation = client.get(
+            f"/api/business/planning-runs/{run_id}/explanation",
+            headers=headers,
+        )
         assert explanation.status_code == 200
         assert "explanation" in explanation.json()

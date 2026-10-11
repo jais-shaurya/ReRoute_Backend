@@ -7,6 +7,8 @@ from app.schemas.planner import (
     PlannerRequest,
     PlannerResponse,
 )
+from app.database.models import AppUser
+from app.security.auth import get_current_user
 from app.services.planner import InfeasiblePlanningError, PlannerService
 from app.services.planner_serializer import (
     serialize_planner_result,
@@ -26,6 +28,7 @@ router = APIRouter(
 def recommend_plan(
     request: PlannerRequest,
     db: Session = Depends(get_db),
+    current_user: AppUser = Depends(get_current_user),
 ):
     """
     Generate a disruption-aware recovery recommendation.
@@ -60,6 +63,7 @@ def recommend_plan(
             weights=weights,
             max_alternatives=request.max_alternatives,
             industry=request.industry,
+            current_organization_id=current_user.organization_id,
         )
 
         return serialize_planner_result(result)

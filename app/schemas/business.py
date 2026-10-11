@@ -19,7 +19,8 @@ class OrganizationResponse(BaseModel):
 class UserCreateRequest(BaseModel):
     email: str = Field(..., min_length=3)
     full_name: str = Field(..., min_length=2)
-    role: Literal["admin", "planner", "analyst", "reader"] = "planner"
+    password: str = Field(..., min_length=12, max_length=256)
+    role: Literal["planner", "analyst", "reader"] = "planner"
 
 
 class UserResponse(BaseModel):

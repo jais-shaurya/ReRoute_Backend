@@ -145,3 +145,49 @@ Phase 2 is now implemented and verified against the live database and planner se
 - The database provides supplier reliability but no route reliability history. Route and combined stockout probabilities are therefore returned as `null` for plans that include routes without observed reliability; `plan_risk` is explicitly partial and uses supplier evidence only.
 - The configured profile service-level threshold is applied to stored supplier reliability as a feasibility proxy. It is not presented as measured end-to-end service-level performance.
 - The Phase 2 identity-header limitation remains: identity headers require a trusted upstream auth layer and are not cryptographic authentication.
+
+## Phase 4 — Backend security and quality hardening
+
+### Acceptance checklist
+
+- [x] Signed 15-minute Bearer tokens replace identity and role headers
+- [x] Passwords use Argon2 hashes; legacy accounts without hashes fail login
+- [x] Missing/weak token signing configuration fails closed
+- [x] Planner and business routes require verified active users
+- [x] Persisted database roles control access; only admins provision users and the API cannot assign admin
+- [x] Tenant scope covers entity CRUD, scenarios/execution, planner graph, run history, comparison, and explanation
+- [x] CORS uses exact allowlisted origins, limited methods/headers, and no credentialed wildcard
+- [x] Authentication errors are generic; passwords/hashes are not returned
+- [x] Alembic migration preserves legacy rows, adds nullable password hashes, and avoids ambiguous multi-tenant backfill
+- [x] Startup no longer creates schema or a default privileged user
+- [x] Operator provisioning path exists for initial/legacy administrator credentials
+- [x] Focused security and migration tests pass
+- [x] One final full backend regression run passes
+- [x] Phase 4-only files committed as a stable checkpoint
+
+### Migration status
+
+- Live backend database was at Alembic-unversioned legacy state with 1 organization and 75 entity-access rows.
+- `alembic upgrade head` applied revisions `20261011_0001` and `20261011_0002`.
+- Verified head: `20261011_0002`; `app_users.password_hash` is present.
+- Before migration row counts: organizations 1, users 1, suppliers 21, customers 8, warehouses 4, factories 2, routes 40, tenant access 75. After the final regression suite: organizations 1, users 1, suppliers 27, customers 8, warehouses 4, factories 2, routes 40, tenant access 81. Six supplier/access additions were test-created integration data; existing rows were preserved and migration seeded no duplicate links.
+
+### Focused verification
+
+- Command: `..\ReRoute_Backend\venv\Scripts\python.exe -m pytest -q scripts/test_security.py scripts/test_migrations.py scripts/test_business_api.py scripts/test_planner_api.py`
+- Result: `25 passed in 68.59s`
+
+### Final regression
+
+- Command: `..\ReRoute_Backend\venv\Scripts\python.exe -m pytest -q`
+- Result: `114 passed in 100.54s`
+- Remaining warning: `scripts/test_database.py::test_database_connection` returns a value instead of asserting; this warning existed before Phase 4.
+- Baseline before Phase 4: `93 passed`; no pre-existing failing tests were observed.
+
+### Deployment requirements and remaining limitations
+
+- Set `REROUTE_AUTH_SECRET` to a high-entropy secret of at least 32 bytes through a deployment secret manager. The current local environment did not contain it; authenticated production requests therefore remain unavailable until set.
+- Set `REROUTE_CORS_ORIGINS` to the exact deployed frontend origins; local defaults are only for development.
+- Provision/reset an admin using `python scripts/provision_admin.py`; never expose its direct database access to application users.
+- Configure TLS and rate-limiting/brute-force controls at the reverse proxy or gateway. MFA, refresh tokens, verification emails, and identity-provider integration are not implemented.
+- The old identity headers are ignored. As documented in Phase 2, those headers are not cryptographic credentials and must not be trusted if a deployment reintroduces them through a gateway.
