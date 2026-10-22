@@ -1,78 +1,133 @@
+import sqlite3
 from pathlib import Path
 
-import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import create_engine, inspect
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+import app.database.connection as database_connection
+from app.database.models import IndustryProfile
 
 
-def test_upgrade_preserves_existing_data_and_adds_password_column(tmp_path):
+BUSINESS_TABLES = (
+    "suppliers",
+    "factories",
+    "warehouses",
+    "customers",
+    "routes",
+    "orders",
+)
+CODE_COLUMNS = {
+    "suppliers": "supplier_code",
+    "factories": "factory_code",
+    "warehouses": "warehouse_code",
+    "customers": "customer_code",
+    "routes": "route_code",
+    "orders": "order_code",
+}
+
+
+def test_organization_migration_backfills_and_preserves_legacy_rows(
+    tmp_path: Path,
+    monkeypatch,
+):
     database_path = tmp_path / "legacy.sqlite3"
-    engine = sa.create_engine(f"sqlite:///{database_path.as_posix()}")
-    with engine.begin() as connection:
-        connection.execute(
-            sa.text(
-                "CREATE TABLE organizations ("
-                "id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, "
-                "slug VARCHAR(80) NOT NULL UNIQUE, created_at DATETIME NOT NULL)"
+    with sqlite3.connect(database_path) as connection:
+        for table_name in BUSINESS_TABLES:
+            code_column = CODE_COLUMNS[table_name]
+            connection.execute(
+                f"CREATE TABLE {table_name} ("
+                f"id INTEGER PRIMARY KEY, {code_column} VARCHAR(50) NOT NULL)"
             )
-        )
-        connection.execute(
-            sa.text(
-                "CREATE TABLE app_users ("
-                "id INTEGER PRIMARY KEY, email VARCHAR(160) NOT NULL UNIQUE, "
-                "full_name VARCHAR(160) NOT NULL, role VARCHAR(40) NOT NULL, "
-                "organization_id INTEGER NOT NULL, is_active BOOLEAN NOT NULL, "
-                "created_at DATETIME NOT NULL)"
+            connection.execute(
+                f"CREATE UNIQUE INDEX ix_{table_name}_{code_column} "
+                f"ON {table_name} ({code_column})"
             )
-        )
-        connection.execute(
-            sa.text(
-                "CREATE TABLE suppliers ("
-                "id INTEGER PRIMARY KEY, supplier_code VARCHAR(50) NOT NULL UNIQUE, "
-                "name VARCHAR(150) NOT NULL, capacity INTEGER NOT NULL, "
-                "unit_cost FLOAT NOT NULL, reliability FLOAT NOT NULL, available BOOLEAN NOT NULL)"
+            connection.execute(
+                f"INSERT INTO {table_name} (id, {code_column}) "
+                "VALUES (7, 'legacy-code')"
             )
-        )
-        connection.execute(
-            sa.text(
-                "INSERT INTO organizations (id, name, slug, created_at) "
-                "VALUES (1, 'Legacy Org', 'legacy', CURRENT_TIMESTAMP)"
-            )
-        )
-        connection.execute(
-            sa.text(
-                "INSERT INTO suppliers "
-                "(id, supplier_code, name, capacity, unit_cost, reliability, available) "
-                "VALUES (12, 'LEGACY-12', 'Legacy Supplier', 100, 2.5, 0.9, 1)"
-            )
-        )
-        connection.execute(
-            sa.text(
-                "INSERT INTO app_users "
-                "(id, email, full_name, role, organization_id, is_active, created_at) "
-                "VALUES (7, 'legacy@example.test', 'Legacy Admin', 'admin', 1, 1, CURRENT_TIMESTAMP)"
-            )
-        )
 
-    repository_root = Path(__file__).resolve().parents[1]
-    config = Config(str(repository_root / "alembic.ini"))
-    config.set_main_option("script_location", str(repository_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
-    command.upgrade(config, "head")
+    monkeypatch.setattr(
+        database_connection,
+        "DATABASE_URL",
+        "sqlite:///" + database_path.as_posix(),
+    )
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option(
+        "script_location",
+        str(backend_root / "migrations"),
+    )
+
+    command.stamp(config, "20261011_0001")
     command.upgrade(config, "head")
 
-    inspector = sa.inspect(engine)
-    assert "password_hash" in {column["name"] for column in inspector.get_columns("app_users")}
-    with engine.connect() as connection:
-        user = connection.execute(
-            sa.text("SELECT id, email, role FROM app_users WHERE id = 7")
-        ).one()
-        assert tuple(user) == (7, "legacy@example.test", "admin")
-        assert connection.execute(
-            sa.text(
-                "SELECT COUNT(*) FROM organization_entity_access "
-                "WHERE organization_id = 1 AND entity_type = 'supplier' AND entity_id = 12"
-            )
-        ).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "20261011_0002"
-    engine.dispose()
+    with sqlite3.connect(database_path) as connection:
+        for table_name in BUSINESS_TABLES:
+            assert connection.execute(
+                f"SELECT organization_id FROM {table_name} WHERE id = 7"
+            ).fetchone() == (1,)
+
+    command.downgrade(config, "20261011_0001")
+
+    engine = create_engine("sqlite:///" + database_path.as_posix())
+    try:
+        inspector = inspect(engine)
+        for table_name in BUSINESS_TABLES:
+            assert "organization_id" not in {
+                column["name"]
+                for column in inspector.get_columns(table_name)
+            }
+            with sqlite3.connect(database_path) as connection:
+                assert connection.execute(
+                    f"SELECT id FROM {table_name} WHERE id = 7"
+                ).fetchone() == (7,)
+    finally:
+        engine.dispose()
+
+
+def test_fresh_database_upgrades_to_current_schema_and_profiles(
+    tmp_path: Path,
+    monkeypatch,
+):
+    database_path = tmp_path / "fresh.sqlite3"
+    monkeypatch.setattr(
+        database_connection,
+        "DATABASE_URL",
+        "sqlite:///" + database_path.as_posix(),
+    )
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option(
+        "script_location",
+        str(backend_root / "migrations"),
+    )
+
+    command.upgrade(config, "head")
+
+    engine = create_engine("sqlite:///" + database_path.as_posix())
+    try:
+        inspector = inspect(engine)
+        assert {
+            "organizations",
+            "organization_memberships",
+            "auth_sessions",
+            "organization_settings",
+            "organization_parameter_values",
+            "suppliers",
+            "orders",
+        }.issubset(set(inspector.get_table_names()))
+        with Session(engine) as session:
+            assert set(
+                session.scalars(select(IndustryProfile.code)).all()
+            ) == {
+                "manufacturing",
+                "retail_distribution",
+                "food_distribution",
+                "healthcare_logistics",
+            }
+    finally:
+        engine.dispose()

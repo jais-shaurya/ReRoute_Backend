@@ -1,0 +1,179 @@
+import os
+
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
+
+from app.database.connection import get_db
+from app.database.models import (
+    Organization,
+    OrganizationMembership,
+    User,
+)
+from app.schemas.auth import (
+    AuthTokenResponse,
+    CurrentUserResponse,
+    LoginRequest,
+)
+from app.security.auth import (
+    ACCESS_TOKEN_LIFETIME,
+    AuthPrincipal,
+    issue_auth_session,
+    revoke_refresh_token,
+    rotate_refresh_token,
+    verify_password,
+)
+from app.security.permissions import Permission, require_permission
+
+
+router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+REFRESH_COOKIE_NAME = "reroute_refresh"
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=14 * 24 * 60 * 60,
+        httponly=True,
+        secure=os.getenv("REROUTE_COOKIE_SECURE", "true").lower() == "true",
+        samesite="strict",
+        path="/api/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        httponly=True,
+        secure=os.getenv("REROUTE_COOKIE_SECURE", "true").lower() == "true",
+        samesite="strict",
+        path="/api/auth",
+    )
+
+
+@router.post("/login", response_model=AuthTokenResponse)
+def login(
+    request: LoginRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> AuthTokenResponse:
+    user = (
+        db.query(User)
+        .filter(User.email == request.email.lower())
+        .one_or_none()
+    )
+    organization = (
+        db.query(Organization)
+        .filter(Organization.slug == request.organization_slug)
+        .one_or_none()
+    )
+    membership = None
+    if user is not None and organization is not None:
+        membership = (
+            db.query(OrganizationMembership)
+            .filter(
+                OrganizationMembership.user_id == user.id,
+                OrganizationMembership.organization_id == organization.id,
+            )
+            .one_or_none()
+        )
+
+    password_valid = (
+        verify_password(request.password, user.password_hash)
+        if user is not None
+        else False
+    )
+    if (
+        not password_valid
+        or user is None
+        or not user.is_active
+        or organization is None
+        or not organization.is_active
+        or membership is None
+        or not membership.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials or organization membership.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token, refresh_token = issue_auth_session(
+        db,
+        user,
+        membership,
+        organization,
+    )
+    _set_refresh_cookie(response, refresh_token)
+    return AuthTokenResponse(
+        access_token=access_token,
+        expires_in=int(ACCESS_TOKEN_LIFETIME.total_seconds()),
+    )
+
+
+@router.post("/refresh", response_model=AuthTokenResponse)
+def refresh(
+    response: Response,
+    refresh_token: str | None = Cookie(
+        default=None,
+        alias=REFRESH_COOKIE_NAME,
+    ),
+    db: Session = Depends(get_db),
+) -> AuthTokenResponse:
+    tokens = (
+        rotate_refresh_token(db, refresh_token)
+        if refresh_token is not None
+        else None
+    )
+    if tokens is None:
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh session is invalid or expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token, rotated_refresh_token, expires_in = tokens
+    _set_refresh_cookie(response, rotated_refresh_token)
+    return AuthTokenResponse(
+        access_token=access_token,
+        expires_in=expires_in,
+    )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    response: Response,
+    refresh_token: str | None = Cookie(
+        default=None,
+        alias=REFRESH_COOKIE_NAME,
+    ),
+    db: Session = Depends(get_db),
+) -> Response:
+    revoke_refresh_token(db, refresh_token)
+    _clear_refresh_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.get("/me", response_model=CurrentUserResponse)
+def current_user(
+    principal: AuthPrincipal = Depends(
+        require_permission(Permission.PLANNER_READ)
+    ),
+    db: Session = Depends(get_db),
+) -> CurrentUserResponse:
+    user = db.get(User, principal.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+    return CurrentUserResponse(
+        user_id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        organization_id=principal.organization_id,
+        organization_slug=principal.organization_slug,
+        role=principal.role,
+    )
