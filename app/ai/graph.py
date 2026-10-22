@@ -4,13 +4,17 @@ from sqlalchemy.orm import Session
 from app.database.models import (
     Customer,
     Factory,
+    OrganizationEntityAccess,
     Route,
     Supplier,
     Warehouse,
 )
 
 
-def build_supply_chain_graph(session: Session) -> nx.DiGraph:
+def build_supply_chain_graph(
+    session: Session,
+    organization_id: int | None = None,
+) -> nx.DiGraph:
     """
     Build an in-memory directed graph from the PostgreSQL
     supply-chain data.
@@ -28,11 +32,28 @@ def build_supply_chain_graph(session: Session) -> nx.DiGraph:
     # Load database entities
     # -----------------------------------------------------
 
-    suppliers = session.query(Supplier).all()
-    factories = session.query(Factory).all()
-    warehouses = session.query(Warehouse).all()
-    customers = session.query(Customer).all()
-    routes = session.query(Route).all()
+    if organization_id is None:
+        suppliers = session.query(Supplier).all()
+        factories = session.query(Factory).all()
+        warehouses = session.query(Warehouse).all()
+        customers = session.query(Customer).all()
+        routes = session.query(Route).all()
+    else:
+        access = session.query(OrganizationEntityAccess).filter_by(
+            organization_id=organization_id
+        )
+        entity_ids = {
+            entity_type: {
+                item.entity_id
+                for item in access.filter_by(entity_type=entity_type).all()
+            }
+            for entity_type in ("supplier", "factory", "warehouse", "customer", "route")
+        }
+        suppliers = session.query(Supplier).filter(Supplier.id.in_(entity_ids["supplier"])).all()
+        factories = session.query(Factory).filter(Factory.id.in_(entity_ids["factory"])).all()
+        warehouses = session.query(Warehouse).filter(Warehouse.id.in_(entity_ids["warehouse"])).all()
+        customers = session.query(Customer).filter(Customer.id.in_(entity_ids["customer"])).all()
+        routes = session.query(Route).filter(Route.id.in_(entity_ids["route"])).all()
 
     # -----------------------------------------------------
     # Add Supplier nodes
@@ -132,6 +153,7 @@ def build_supply_chain_graph(session: Session) -> nx.DiGraph:
                 delivery_time_days=route.delivery_time_days,
                 capacity=route.capacity,
                 available=route.available,
+                reliability=getattr(route, "reliability", None),
             )
 
     return graph

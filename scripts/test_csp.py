@@ -1,3 +1,5 @@
+import networkx as nx
+
 from app.database.connection import SessionLocal
 from app.ai.graph import build_supply_chain_graph
 from app.ai.csp import (
@@ -5,8 +7,96 @@ from app.ai.csp import (
     candidate_plan_from_astar,
     validate_candidate_plan,
     generate_feasible_plans,
+    search_feasible_plans,
 )
 from app.ai.disruption import simulate_supplier_failure
+
+
+def test_cheapest_infeasible_path_does_not_hide_feasible_alternative():
+    graph = nx.DiGraph()
+    graph.add_node(
+        "supplier:1",
+        node_type="supplier",
+        database_id=1,
+        available=True,
+        capacity=20,
+        reliability=0.95,
+    )
+    graph.add_node(
+        "factory:1",
+        node_type="factory",
+        database_id=1,
+        available=True,
+        capacity=20,
+    )
+    graph.add_node(
+        "customer:1",
+        node_type="customer",
+        database_id=1,
+        demand=10,
+        deadline_days=5,
+    )
+    graph.add_edge(
+        "supplier:1",
+        "customer:1",
+        available=True,
+        capacity=5,
+        transportation_cost=1.0,
+        delivery_time_days=1,
+    )
+    graph.add_edge(
+        "supplier:1",
+        "factory:1",
+        available=True,
+        capacity=20,
+        transportation_cost=2.0,
+        delivery_time_days=1,
+    )
+    graph.add_edge(
+        "factory:1",
+        "customer:1",
+        available=True,
+        capacity=20,
+        transportation_cost=2.0,
+        delivery_time_days=1,
+    )
+
+    plans = generate_feasible_plans(graph, customer_id=1, quantity=10)
+
+    assert len(plans) == 1
+    assert plans[0].path == ["supplier:1", "factory:1", "customer:1"]
+
+
+def test_search_reports_concrete_capacity_rejection_reason():
+    graph = nx.DiGraph()
+    graph.add_node("supplier:1", node_type="supplier", database_id=1, available=True, capacity=20)
+    graph.add_node("customer:1", node_type="customer", database_id=1, demand=10, deadline_days=5)
+    graph.add_edge(
+        "supplier:1",
+        "customer:1",
+        available=True,
+        capacity=5,
+        transportation_cost=1.0,
+        delivery_time_days=1,
+    )
+
+    result = search_feasible_plans(graph, customer_id=1, quantity=10)
+
+    assert not result.plans
+    assert any("Route capacity violation" in reason for rejection in result.rejected_candidates for reason in rejection.reasons)
+
+
+def test_candidate_cannot_falsify_route_cost_or_delivery_time(graph):
+    plan = find_valid_candidate(graph, customer_id=1, quantity=int(graph.nodes["customer:1"]["demand"]))
+    assert plan is not None
+
+    plan.total_cost += 1
+    plan.total_days += 1
+    valid, violations = validate_candidate_plan(graph, plan)
+
+    assert not valid
+    assert any("total cost does not match" in reason for reason in violations)
+    assert any("delivery time does not match" in reason for reason in violations)
 
 
 def find_valid_candidate(graph, customer_id, quantity):

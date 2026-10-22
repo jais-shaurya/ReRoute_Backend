@@ -1,4 +1,8 @@
+import os
+
 import pytest
+
+os.environ.setdefault("REROUTE_AUTH_SECRET", "test-only-secret-never-use-in-production-000000")
 
 from app.database.connection import SessionLocal
 from app.ai.graph import build_supply_chain_graph

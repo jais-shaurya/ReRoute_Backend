@@ -175,6 +175,12 @@ def test_invalid_weights_raise():
     with pytest.raises(ValueError):
         ScoringWeights(0.4, 0.4, 0.3)
 
+    with pytest.raises(ValueError, match="finite"):
+        ScoringWeights(float("nan"), 0.5, 0.5)
+
+    with pytest.raises(ValueError, match="finite"):
+        ScoringWeights(float("inf"), 0.0, 0.0)
+
 
 def test_mismatched_plan_and_risk_counts_are_rejected():
     plans = [make_plan(1, 100.0, 2)]
@@ -218,6 +224,26 @@ def test_multiple_plans_receive_deterministic_ranks():
     assert [item.plan.supplier_id for item in first] == [
         item.plan.supplier_id for item in second
     ]
+
+
+def test_scored_plan_preserves_weights_and_formula_result():
+    weights = ScoringWeights(cost_weight=0.5, time_weight=0.3, risk_weight=0.2)
+    result = score_plans(
+        [make_plan(1, 10.0, 1), make_plan(2, 20.0, 2)],
+        [make_risk(0.1), make_risk(0.2)],
+        weights,
+    )
+
+    for scored in result:
+        expected = (
+            weights.cost_weight * scored.normalized_cost
+            + weights.time_weight * scored.normalized_time
+            + weights.risk_weight * scored.normalized_risk
+        )
+        assert scored.cost_weight == weights.cost_weight
+        assert scored.time_weight == weights.time_weight
+        assert scored.risk_weight == weights.risk_weight
+        assert scored.overall_score == round(expected, 6)
 
 
 def test_tie_breaking_is_deterministic():

@@ -96,6 +96,7 @@ def build_test_graph() -> nx.DiGraph:
             delivery_time_days=1,
             capacity=100,
             available=True,
+            reliability=0.95,
         )
 
     # --------------------------------------------------------
@@ -109,6 +110,7 @@ def build_test_graph() -> nx.DiGraph:
         delivery_time_days=1,
         capacity=200,
         available=True,
+            reliability=0.95,
     )
 
     # --------------------------------------------------------
@@ -122,6 +124,7 @@ def build_test_graph() -> nx.DiGraph:
         delivery_time_days=1,
         capacity=200,
         available=True,
+            reliability=0.95,
     )
 
     return graph
@@ -354,6 +357,7 @@ def test_route_risk_increases_with_more_routes():
         delivery_time_days=2,
         capacity=100,
         available=True,
+        reliability=0.95,
     )
 
     short_plan = CandidatePlan(
@@ -536,3 +540,41 @@ def test_probability_values_are_bounded():
         <= result.plan_risk
         <= 1.0
     )
+
+
+def test_missing_route_reliability_is_reported_as_unknown():
+    graph = build_test_graph()
+    for _, _, edge in graph.edges(data=True):
+        edge.pop("reliability", None)
+    plan = create_plan(1)
+
+    result = estimate_plan_risk(graph, plan)
+
+    assert result.route_failure_probability is None
+    assert result.stockout_probability is None
+    assert result.risk_is_partial is True
+    assert result.missing_evidence
+
+
+def test_route_reliability_is_combined_from_observed_edge_values():
+    graph = build_test_graph()
+    plan = create_plan(1)
+
+    result = estimate_plan_risk(graph, plan)
+
+    assert result.route_failure_probability == 0.142625
+    assert result.stockout_probability == 0.185494
+    assert result.risk_is_partial is False
+
+
+def test_certain_supplier_failure_remains_certain_with_unknown_routes():
+    graph = build_test_graph()
+    graph.nodes["supplier:3"]["available"] = False
+    for _, _, edge in graph.edges(data=True):
+        edge.pop("reliability", None)
+
+    result = estimate_plan_risk(graph, create_plan(3))
+
+    assert result.risk_is_partial is True
+    assert result.stockout_probability == 1.0
+    assert result.plan_risk == 1.0

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-
 import networkx as nx
 from sqlalchemy.orm import Session
 
@@ -10,7 +9,10 @@ from app.ai.bayesian_risk import (
 )
 from app.ai.csp import (
     CandidatePlan,
+    CandidateRejection,
+    CandidateSearchResult,
     generate_feasible_plans,
+    search_feasible_plans,
 )
 from app.ai.disruption import (
     simulate_demand_spike,
@@ -26,6 +28,7 @@ from app.ai.scoring import (
     ScoringWeights,
     score_plans,
 )
+from app.config.industry import validate_industry_configuration
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,23 @@ class PlannerResult:
     recommendation: RecommendationResult
     scenario: PlannerScenario
     candidate_plans: tuple[ScoredPlan, ...]
+    rejected_candidates: tuple[CandidateRejection, ...] = ()
+
+
+class InfeasiblePlanningError(ValueError):
+    """A valid planning request for which all known candidates are infeasible."""
+
+    def __init__(self, rejected_candidates: tuple[CandidateRejection, ...]):
+        self.rejected_candidates = rejected_candidates
+        details = []
+        for rejection in rejected_candidates:
+            path = " -> ".join(rejection.path) if rejection.path else "no path"
+            reasons = "; ".join(rejection.reasons)
+            details.append(f"supplier {rejection.supplier_id} ({path}): {reasons}")
+        message = "No feasible recovery plans exist for the requested scenario."
+        if details:
+            message += " Rejected candidates: " + " | ".join(details)
+        super().__init__(message)
 
 
 class PlannerService:
@@ -73,12 +93,12 @@ class PlannerService:
     # Graph
     # ========================================================
 
-    def build_graph(self) -> nx.DiGraph:
+    def build_graph(self, organization_id: int | None = None) -> nx.DiGraph:
         """
         Build a fresh supply-chain graph from the database.
         """
 
-        return build_supply_chain_graph(self.session)
+        return build_supply_chain_graph(self.session, organization_id)
 
     # ========================================================
     # Scenario
@@ -143,6 +163,20 @@ class PlannerService:
             graph,
             customer_id,
             quantity,
+        )
+
+    def search_candidates(
+        self,
+        graph: nx.DiGraph,
+        customer_id: int,
+        quantity: int,
+        min_supplier_reliability: float,
+    ) -> CandidateSearchResult:
+        return search_feasible_plans(
+            graph,
+            customer_id,
+            quantity,
+            min_supplier_reliability,
         )
 
     # ========================================================
@@ -218,6 +252,9 @@ class PlannerService:
         demand_spike_percentage: float | None = None,
         weights: ScoringWeights | None = None,
         max_alternatives: int = 3,
+        industry: str | None = None,
+        base_graph: nx.DiGraph | None = None,
+        current_organization_id: int | None = None,
     ) -> PlannerResult:
         """
         Execute the complete ReRoute planning pipeline.
@@ -260,11 +297,26 @@ class PlannerService:
                 "max_alternatives cannot be negative."
             )
 
+        profile = validate_industry_configuration(
+            industry,
+            demand_spike_percentage=demand_spike_percentage,
+            weights=weights,
+            disruption_type=disruption_type or "none",
+        )
+
+        if weights is None:
+            weights = profile.default_weights
+
         # ----------------------------------------------------
         # Build base graph
         # ----------------------------------------------------
 
-        graph = self.build_graph()
+        if base_graph is not None:
+            graph = base_graph.copy()
+        elif current_organization_id is not None:
+            graph = self.build_graph(current_organization_id)
+        else:
+            graph = self.build_graph()
 
         # ----------------------------------------------------
         # Validate selected customer
@@ -297,7 +349,8 @@ class PlannerService:
         scenario_quantity = quantity
 
         if disruption_type is None:
-            scenario_graph = graph
+            scenario_graph = graph.copy()
+            scenario_graph.nodes[customer_node]["demand"] = quantity
 
             scenario = PlannerScenario(
                 type="none",
@@ -317,6 +370,7 @@ class PlannerService:
                 graph,
                 supplier_id,
             )
+            scenario_graph.nodes[customer_node]["demand"] = quantity
 
             scenario = PlannerScenario(
                 type="supplier_failure",
@@ -359,6 +413,7 @@ class PlannerService:
                 )
 
             scenario_quantity = int(updated_demand)
+            scenario_graph.nodes[customer_node]["demand"] = scenario_quantity
 
             if scenario_quantity <= 0:
                 raise ValueError(
@@ -383,17 +438,16 @@ class PlannerService:
         # CSP candidate generation
         # ----------------------------------------------------
 
-        plans = self.generate_candidates(
+        candidate_search = self.search_candidates(
             scenario_graph,
             customer_id,
             scenario_quantity,
+            profile.min_service_level,
         )
+        plans = candidate_search.plans
 
         if not plans:
-            raise ValueError(
-                "No feasible recovery plans exist "
-                "for the requested scenario."
-            )
+            raise InfeasiblePlanningError(candidate_search.rejected_candidates)
 
         # ----------------------------------------------------
         # Bayesian risk
@@ -435,4 +489,5 @@ class PlannerService:
             recommendation=recommendation,
             scenario=scenario,
             candidate_plans=tuple(ranked_plans),
+            rejected_candidates=candidate_search.rejected_candidates,
         )

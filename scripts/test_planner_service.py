@@ -1,6 +1,7 @@
+import networkx as nx
 import pytest
 
-from app.services.planner import PlannerService
+from app.services.planner import InfeasiblePlanningError, PlannerService
 from app.database.connection import SessionLocal
 
 
@@ -81,23 +82,35 @@ def test_planner_custom_weights():
         db.close()
 
 
-def test_planner_with_demand_spike_no_feasible_plan():
-    db = SessionLocal()
+def test_planner_reports_real_capacity_infeasibility():
+    graph = nx.DiGraph()
+    graph.add_node(
+        "supplier:1",
+        node_type="supplier",
+        database_id=1,
+        capacity=9,
+        available=True,
+        reliability=0.99,
+    )
+    graph.add_node(
+        "customer:1",
+        node_type="customer",
+        database_id=1,
+        demand=10,
+        deadline_days=5,
+    )
+    graph.add_edge(
+        "supplier:1",
+        "customer:1",
+        available=True,
+        capacity=20,
+        transportation_cost=5.0,
+        delivery_time_days=1,
+    )
+    service = PlannerService(session=None)
+    service.build_graph = lambda: graph
 
-    try:
-        service = PlannerService(db)
+    with pytest.raises(InfeasiblePlanningError, match="supplier capacity") as error:
+        service.recommend(customer_id=1, quantity=10)
 
-        with pytest.raises(
-            ValueError,
-            match="No feasible recovery plans exist",
-        ):
-            service.recommend(
-                customer_id=1,
-                quantity=42,
-                disruption_type="demand_spike",
-                disruption_customer_id=1,
-                demand_spike_percentage=20,
-            )
-
-    finally:
-        db.close()
+    assert error.value.rejected_candidates[0].supplier_id == 1

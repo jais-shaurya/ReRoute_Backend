@@ -73,6 +73,9 @@ class ScoredPlan:
 
     overall_score: float
     rank: int
+    cost_weight: float = 0.40
+    time_weight: float = 0.30
+    risk_weight: float = 0.30
 
 
 def normalize_minimization(
@@ -269,6 +272,9 @@ def score_plans(
                 normalized_risk=round(normalized_risk, 6),
                 overall_score=round(overall_score, 6),
                 rank=0,
+                cost_weight=weights.cost_weight,
+                time_weight=weights.time_weight,
+                risk_weight=weights.risk_weight,
             )
         )
 
@@ -286,6 +292,9 @@ def score_plans(
                 normalized_risk=result.normalized_risk,
                 overall_score=result.overall_score,
                 rank=rank,
+                cost_weight=result.cost_weight,
+                time_weight=result.time_weight,
+                risk_weight=result.risk_weight,
             )
         )
 

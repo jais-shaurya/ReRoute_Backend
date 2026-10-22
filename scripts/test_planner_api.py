@@ -1,9 +1,13 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.security.auth import create_access_token
 
 
-client = TestClient(app)
+client = TestClient(
+    app,
+    headers={"Authorization": f"Bearer {create_access_token(1)}"},
+)
 
 
 def test_health_endpoint():
@@ -41,12 +45,34 @@ def test_planner_normal_request():
     assert "actions" in data
     assert "scenario" in data
     assert "candidate_plans" in data
+    assert "rejected_candidates" in data
 
     assert data["scenario"]["type"] == "none"
     assert data["scenario"]["customer_id"] == 1
     assert data["scenario"]["quantity"] == 42
 
     assert data["recommended_plan"]["rank"] == 1
+    assert data["recommended_plan"]["cost_weight"] == 0.4
+    assert "Score = 0.400 * cost" in data["explanation"]
+    assert data["recommended_plan"]["risk"]["route_failure_probability"] is None
+    assert data["recommended_plan"]["risk"]["stockout_probability"] is None
+    assert data["recommended_plan"]["risk"]["risk_is_partial"] is True
+
+
+def test_internal_value_error_is_not_reported_as_bad_request():
+    from unittest.mock import patch
+
+    with patch(
+        "app.services.planner.PlannerService.calculate_risks",
+        side_effect=ValueError("corrupt risk evidence"),
+    ):
+        response = client.post(
+            "/api/planner/recommend",
+            json={"customer_id": 1, "quantity": 42},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "The planner encountered an internal error."
 
 
 def test_planner_supplier_failure():
@@ -122,15 +148,12 @@ def test_invalid_quantity():
     assert response.status_code == 422
 
 
-def test_demand_spike_no_feasible_plan():
+def test_infeasible_plan_returns_real_rejection_reasons():
     response = client.post(
         "/api/planner/recommend",
         json={
             "customer_id": 1,
-            "quantity": 42,
-            "disruption_type": "demand_spike",
-            "disruption_customer_id": 1,
-            "demand_spike_percentage": 20,
+            "quantity": 1000000,
         },
     )
 
@@ -140,3 +163,4 @@ def test_demand_spike_no_feasible_plan():
 
     assert "detail" in data
     assert "No feasible recovery plans" in data["detail"]
+    assert "supplier capacity" in data["detail"]

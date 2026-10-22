@@ -1,0 +1,27 @@
+from pydantic import BaseModel, Field, field_validator
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+    organization_slug: str = Field(min_length=1, max_length=80)
+
+    @field_validator("email", "organization_slug")
+    @classmethod
+    def strip_identifiers(cls, value: str) -> str:
+        return value.strip()
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class CurrentUserResponse(BaseModel):
+    user_id: int
+    email: str
+    full_name: str
+    organization_id: int
+    organization_slug: str
+    role: str

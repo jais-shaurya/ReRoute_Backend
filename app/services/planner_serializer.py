@@ -1,4 +1,5 @@
 from app.schemas.planner import (
+    CandidateRejectionResponse,
     CandidatePlanResponse,
     PlannerResponse,
     RecommendationActionResponse,
@@ -37,12 +38,17 @@ def serialize_scored_plan(
                 risk.stockout_probability
             ),
             plan_risk=risk.plan_risk,
+            risk_is_partial=risk.risk_is_partial,
+            missing_evidence=list(risk.missing_evidence),
         ),
         normalized_cost=scored_plan.normalized_cost,
         normalized_time=scored_plan.normalized_time,
         normalized_risk=scored_plan.normalized_risk,
         overall_score=scored_plan.overall_score,
         rank=scored_plan.rank,
+        cost_weight=scored_plan.cost_weight,
+        time_weight=scored_plan.time_weight,
+        risk_weight=scored_plan.risk_weight,
     )
 
 
@@ -97,4 +103,12 @@ def serialize_planner_result(
         actions=actions,
         scenario=scenario,
         candidate_plans=candidate_plans,
+        rejected_candidates=[
+            CandidateRejectionResponse(
+                supplier_id=item.supplier_id,
+                path=list(item.path),
+                reasons=list(item.reasons),
+            )
+            for item in result.rejected_candidates
+        ],
     )
